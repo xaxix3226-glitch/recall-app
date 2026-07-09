@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Recall — Study Smarter</title>
+<style>
+  :root{
+    --bg: #0F1115;
+    --surface: #1A1D24;
+    --surface-2: #22262F;
+    --border: #2A2E38;
+    --text: #E8E9ED;
+    --text-dim: #8B8F9A;
+    --accent: #7C6FFF;
+    --accent-dim: #7C6FFF33;
+    --gold: #FFB74D;
+    --green: #4ADE80;
+    --red: #F87171;
+    --radius: 18px;
+    --font-display: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --font-body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  [data-theme="light"]{
+    --bg: #F5F4F2;
+    --surface: #FFFFFF;
+    --surface-2: #EFEEEA;
+    --border: #E1DFDA;
+    --text: #1A1D24;
+    --text-dim: #6B6F78;
+    --accent-dim: #7C6FFF22;
+  }
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html,body{ height:100%; overscroll-behavior-y: none; }
+  body{
+    margin:0; background:var(--bg); color:var(--text); font-family:var(--font-body);
+    -webkit-font-smoothing:antialiased;
+  }
+  #app{ max-width:520px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column;
+    padding-bottom: 84px; position:relative; }
+  .screen{ padding: 18px 18px 8px; animation: fadeIn .25s ease; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:translateY(0)} }
+
+  /* ---------- Header ---------- */
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:20px 18px 4px; }
+  .brand{ font-size:22px; font-weight:800; letter-spacing:-0.02em; }
+  .brand span{ color:var(--accent); }
+  .streak-pill{ display:flex; align-items:center; gap:6px; background:var(--surface); border:1px solid var(--border);
+    padding:8px 14px; border-radius:999px; font-weight:700; font-size:14px; }
+  .streak-pill.flame{ color:var(--gold); }
+  .xp-pill{ font-family:var(--font-mono); font-size:12px; color:var(--text-dim); }
+
+  .greeting{ font-size:26px; font-weight:800; margin:14px 0 2px; letter-spacing:-0.02em; }
+  .sub{ color:var(--text-dim); font-size:14px; margin-bottom:18px; }
+
+  /* ---------- Cards / surfaces ---------- */
+  .card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; }
+  .goal-card{ background:linear-gradient(135deg, var(--accent-dim), transparent); }
+  .progress-track{ height:10px; background:var(--surface-2); border-radius:999px; overflow:hidden; margin:10px 0 6px; }
+  .progress-fill{ height:100%; background:var(--accent); border-radius:999px; transition:width .4s ease; }
+  .row-between{ display:flex; align-items:center; justify-content:space-between; }
+
+  .subject-row{ display:flex; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--border); }
+  .subject-row:last-child{ border-bottom:none; }
+  .subject-name{ display:flex; align-items:center; gap:10px; font-weight:600; font-size:15px; }
+  .dot{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .subject-pct{ font-family:var(--font-mono); color:var(--text-dim); font-size:13px; }
+
+  .feedback-banner{ display:flex; gap:10px; align-items:flex-start; background:var(--accent-dim); border:1px solid var(--accent); border-radius:14px; padding:12px 14px; font-size:13.5px; margin-bottom:14px; }
+
+  canvas#accuracyChart{ width:100%; height:120px; display:block; }
+
+  h2.section-title{ font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin:22px 0 10px; font-weight:700; }
+
+  /* ---------- Buttons ---------- */
+  .btn{ border:none; border-radius:14px; padding:14px 18px; font-weight:700; font-size:15px; cursor:pointer; font-family:var(--font-body); transition:transform .12s ease, opacity .12s ease; }
+  .btn:active{ transform:scale(.97); }
+  .btn-primary{ background:var(--accent); color:#fff; width:100%; }
+  .btn-ghost{ background:var(--surface-2); color:var(--text); }
+  .btn-outline{ background:transparent; border:1px solid var(--border); color:var(--text); }
+  .btn-sm{ padding:8px 14px; font-size:13px; border-radius:10px; }
+  .btn-block{ width:100%; }
+  .icon-btn{ background:var(--surface-2); border:none; width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; color:var(--text); cursor:pointer; font-size:16px; }
+
+  /* ---------- Bottom nav ---------- */
+  .bottomnav{ position:fixed; bottom:0; left:0; right:0; background:var(--surface); border-top:1px solid var(--border);
+    max-width:520px; margin:0 auto; display:flex; padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); z-index:50; }
+  .navbtn{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; background:none; border:none; color:var(--text-dim); font-size:10.5px; font-weight:600; padding:6px 0; cursor:pointer; }
+  .navbtn.active{ color:var(--accent); }
+  .navbtn .navicon{ font-size:20px; }
+  .fab{ position:absolute; top:-22px; left:50%; transform:translateX(-50%); width:52px; height:52px; border-radius:50%;
+    background:var(--accent); color:#fff; border:4px solid var(--bg); font-size:26px; display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 6px 18px var(--accent-dim); }
+
+  /* ---------- Inputs ---------- */
+  input[type=text], input[type=number], textarea, select{
+    width:100%; background:var(--surface-2); border:1px solid var(--border); color:var(--text);
+    border-radius:12px; padding:12px 14px; font-size:15px; font-family:var(--font-body); margin-bottom:12px;
+  }
+  textarea{ resize:vertical; min-height:80px; }
+  label.field-label{ font-size:12.5px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.05em; display:block; margin-bottom:6px; }
+  .chip-row{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+  .chip{ padding:7px 13px; border-radius:999px; background:var(--surface-2); border:1px solid var(--border); font-size:13px; cursor:pointer; color:var(--text-dim); font-weight:600; }
+  .chip.selected{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .color-swatch{ width:28px; height:28px; border-radius:50%; cursor:pointer; border:2px solid transparent; }
+  .color-swatch.selected{ border-color:var(--text); }
+
+  /* ---------- Study mode ---------- */
+  .study-wrap{ display:flex; flex-direction:column; align-items:center; padding-top:6px; }
+  .study-progress{ width:100%; display:flex; gap:4px; margin-bottom:16px; }
+  .study-progress .seg{ flex:1; height:5px; border-radius:999px; background:var(--surface-2); }
+  .study-progress .seg.done{ background:var(--accent); }
+  .swipe-card{ width:100%; min-height:340px; background:var(--surface); border:1px solid var(--border); border-radius:24px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:28px;
+    position:relative; touch-action:pan-y; user-select:none; cursor:grab; }
+  .swipe-card .badge{ position:absolute; top:16px; left:16px; font-size:11px; font-weight:700; padding:4px 10px; border-radius:999px; }
+  .swipe-card .hint-btn{ position:absolute; top:14px; right:14px; }
+  .qtext{ font-size:20px; font-weight:700; line-height:1.4; }
+  .atext{ font-size:19px; font-weight:600; line-height:1.4; color:var(--accent); }
+  .tap-hint{ margin-top:18px; font-size:12.5px; color:var(--text-dim); }
+  .swipe-card img.card-img{ max-width:100%; max-height:140px; border-radius:12px; margin-bottom:14px; object-fit:cover; }
+  .stamp{ position:absolute; font-weight:900; font-size:28px; letter-spacing:.05em; border:4px solid; padding:4px 14px; border-radius:10px; transform:rotate(-12deg); opacity:0; pointer-events:none; }
+  .stamp.know{ color:var(--green); border-color:var(--green); left:24px; top:40%; }
+  .stamp.practice{ color:var(--red); border-color:var(--red); right:24px; top:40%; transform:rotate(12deg); }
+
+  .rating-row{ display:flex; gap:10px; width:100%; margin-top:18px; }
+  .rating-btn{ flex:1; padding:13px 6px; border-radius:14px; border:none; font-weight:700; font-size:13.5px; cursor:pointer; color:#fff; }
+  .rating-hard{ background:var(--red); }
+  .rating-medium{ background:var(--gold); }
+  .rating-easy{ background:var(--green); }
+
+  .empty-state{ text-align:center; padding:60px 20px; color:var(--text-dim); }
+  .empty-state .big-emoji{ font-size:44px; margin-bottom:10px; }
+
+  /* ---------- Browse ---------- */
+  .search-bar{ display:flex; gap:8px; margin-bottom:14px; }
+  .filter-bar{ display:flex; gap:8px; overflow-x:auto; padding-bottom:8px; margin-bottom:8px; }
+  .filter-bar::-webkit-scrollbar{ display:none; }
+  .list-card{ background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:10px; }
+  .list-card-top{ display:flex; justify-content:space-between; gap:10px; }
+  .list-q{ font-weight:700; font-size:14.5px; margin-bottom:4px; }
+  .list-a{ color:var(--text-dim); font-size:13.5px; }
+  .tag-mini{ font-size:10.5px; padding:2px 8px; border-radius:999px; background:var(--surface-2); color:var(--text-dim); margin-right:4px; display:inline-block; margin-top:6px; }
+
+  /* ---------- Modal ---------- */
+  .modal-overlay{ position:fixed; inset:0; background:#000000aa; z-index:100; display:flex; align-items:flex-end; }
+  .modal-sheet{ background:var(--bg); width:100%; max-width:520px; margin:0 auto; border-radius:24px 24px 0 0;
+    max-height:92vh; overflow-y:auto; padding:8px 20px 28px; animation: slideUp .25s ease; }
+  @keyframes slideUp{ from{transform:translateY(30px); opacity:.4} to{transform:translateY(0); opacity:1} }
+  .sheet-handle{ width:40px; height:4px; background:var(--border); border-radius:999px; margin:10px auto 16px; }
+  .sheet-title{ font-size:19px; font-weight:800; margin-bottom:16px; }
+  .tabbar-inline{ display:flex; gap:8px; margin-bottom:16px; background:var(--surface-2); padding:4px; border-radius:12px; }
+  .tabbar-inline button{ flex:1; padding:9px; border:none; background:none; border-radius:9px; font-weight:700; font-size:13px; color:var(--text-dim); cursor:pointer; }
+  .tabbar-inline button.active{ background:var(--surface); color:var(--text); }
+
+  .exam-result{ text-align:center; padding:20px 0; }
+  .exam-score{ font-size:52px; font-weight:900; color:var(--accent); }
+  .timer-badge{ font-family:var(--font-mono); font-weight:700; font-size:14px; background:var(--surface-2); padding:6px 12px; border-radius:999px; }
+
+  ::-webkit-scrollbar{ width:0; height:0; }
+  a{ color:var(--accent); }
+</style>
+</head>
+<body data-theme="dark">
+<div id="app"></div>
+
+<script>
+/* ==================================================================
+   RECALL — offline flashcard study app
+   Vanilla JS, single file, localStorage persistence.
+   ================================================================== */
+
+const STORE_KEYS = { cards:'fc_cards', subjects:'fc_subjects', settings:'fc_settings', stats:'fc_stats' };
+
+const DEFAULT_SUBJECTS = [
+  {id:'life-science', name:'Life Sciences', icon:'🧬', color:'#4ADE80'},
+  {id:'physics', name:'Physics', icon:'⚛️', color:'#60A5FA'},
+  {id:'maths', name:'Mathematics', icon:'📐', color:'#FFB74D'},
+  {id:'geography', name:'Geography', icon:'🌍', color:'#F472B6'},
+  {id:'chemistry', name:'Chemistry', icon:'⚗️', color:'#7C6FFF'},
+];
+
+const DEFAULT_TAGS = ['Hard','Need Revision','Exam Favourite'];
+
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function daysBetween(a,b){ return Math.round((new Date(b)-new Date(a))/86400000); }
+
+function load(key, fallback){
+  try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch(e){ return fallback; }
+}
+function save(key, val){
+  try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){ console.error('save failed', e); }
+}
+
+let state = {
+  cards: load(STORE_KEYS.cards, []),
+  subjects: load(STORE_KEYS.subjects, DEFAULT_SUBJECTS),
+  settings: load(STORE_KEYS.settings, { theme:'dark', name:'there', dailyGoal:20 }),
+  stats: load(STORE_KEYS.stats, { streak:0, lastStudyDate:null, xp:0, history:[] }),
+  view: 'home',
+  studySession: null,
+  examSession: null,
+  editingCard: null,
+  browseFilter: { subject:null, tag:null, sort:'recent', query:'' },
+};
+
+function persistAll(){
+  save(STORE_KEYS.cards, state.cards);
+  save(STORE_KEYS.subjects, state.subjects);
+  save(STORE_KEYS.settings, state.settings);
+  save(STORE_KEYS.stats, state.stats);
+}
+
+document.body.setAttribute('data-theme', state.settings.theme);
+
+/* ---------------- Spaced repetition ---------------- */
+function initSRS(){ return { interval:0, ease:2.5, dueDate: todayStr(), reps:0, lapses:0 }; }
+
+function rateCard(card, rating){
+  if(!card.srs) card.srs = initSRS();
+  let s = card.srs;
+  if(rating === 'hard'){
+    s.interval = 1;
+    s.ease = Math.max(1.3, s.ease - 0.2);
+    s.lapses += 1;
+  } else if(rating === 'medium'){
+    s.interval = Math.max(1, Math.round((s.interval || 1) * s.ease * 0.6));
+    s.reps += 1;
+  } else if(rating === 'easy'){
+    s.interval = Math.max(2, Math.round((s.interval || 1) * s.ease * 1.3));
+    s.ease = s.ease + 0.1;
+    s.reps += 1;
+  }
+  const due = new Date();
+  due.setDate(due.getDate() + s.interval);
+  s.dueDate = due.toISOString().slice(0,10);
+  card.difficulty = rating;
+  card.reviewCount = (card.reviewCount||0) + 1;
+  card.lastReviewed = todayStr();
+
+  const xpGain = rating==='easy' ? 10 : rating==='medium' ? 6 : 3;
+  state.stats.xp += xpGain;
+
+  let todayEntry = state.stats.history.find(h=>h.date===todayStr());
+  if(!todayEntry){ todayEntry = {date: todayStr(), correct:0, total:0}; state.stats.history.push(todayEntry); }
+  todayEntry.total += 1;
+  if(rating !== 'hard') todayEntry.correct += 1;
+  if(state.stats.history.length > 30) state.stats.history = state.stats.history.slice(-30);
+
+  updateStreak();
+  persistAll();
+}
+
+function updateStreak(){
+  const t = todayStr();
+  if(state.stats.lastStudyDate === t) return;
+  if(state.stats.lastStudyDate){
+    const gap = daysBetween(state.stats.lastStudyDate, t);
+    state.stats.streak = gap === 1 ? state.stats.streak + 1 : 1;
+  } else {
+    state.stats.streak = 1;
+  }
+  state.stats.lastStudyDate = t;
+}
+
+function dueCards(list){
+  const t = todayStr();
+  return list.filter(c => !c.srs || !c.srs.dueDate || c.srs.dueDate <= t);
+}
+
+function level(){ return Math.floor(state.stats.xp / 100) + 1; }
+function xpIntoLevel(){ return state.stats.xp % 100; }
+
+/* ---------------- Import parser ---------------- */
+function parseImportText(text){
+  const rawLines = text.split(/\r?\n/);
+  const nonEmpty = rawLines.map(l=>l.trim()).filter(Boolean);
+  if(nonEmpty.length === 0) return [];
+
+  const tabLines = nonEmpty.filter(l=>l.includes('\t'));
+  if(tabLines.length / nonEmpty.length > 0.5){
+    return nonEmpty.filter(l=>l.includes('\t')).map(l=>{
+      const parts = l.split('\t');
+      const q = parts[0].trim();
+      const a = parts.slice(1).join('\t').trim();
+      return {question:q, answer:a};
+    }).filter(c=>c.question && c.answer);
+  }
+
+  const qRe = /^\s*(q|question)\s*[:.\-\)]\s*/i;
+  const aRe = /^\s*(a|answer)\s*[:.\-\)]\s*/i;
+  if(rawLines.some(l=>qRe.test(l))){
+    const cards = [];
+    let cur = null;
+    rawLines.forEach(l=>{
+      if(qRe.test(l)){
+        if(cur && cur.question && cur.answer) cards.push(cur);
+        cur = {question: l.replace(qRe,'').trim(), answer:''};
+      } else if(aRe.test(l)){
+        if(cur) cur.answer = l.replace(aRe,'').trim();
+      } else if(l.trim()){
+        if(cur && !cur.answer && cur.question) cur.question += ' ' + l.trim();
+        else if(cur && cur.answer) cur.answer += ' ' + l.trim();
+      }
+    });
+    if(cur && cur.question && cur.answer) cards.push(cur);
+    return cards;
+  }
+
+  const blocks = text.split(/\n\s*\n/).map(b=>b.trim()).filter(Boolean);
+  const out = [];
+  blocks.forEach(b=>{
+    const lines = b.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+    if(lines.length >= 2){
+      out.push({question: lines[0], answer: lines.slice(1).join(' ')});
+    } else if(lines.length === 1 && lines[0].includes('?')){
+      // question with no visible answer - skip, needs manual completion
+    }
+  });
+  return out;
+}
+
+/* ================= RENDERING ================= */
+const app = document.getElementById('app');
+
+function render(){
+  let html = '';
+  if(state.view === 'home') html = renderHome();
+  else if(state.view === 'browse') html = renderBrowse();
+  else if(state.view === 'study') html = renderStudy();
+  else if(state.view === 'exam') html = renderExamSetup();
+  else if(state.view === 'examSession') html = renderExamSession();
+  else if(state.view === 'examResult') html = renderExamResult();
+
+  html += renderBottomNav();
+  app.innerHTML = html;
+  attachGlobalHandlers();
+
+  if(state.view === 'home') drawAccuracyChart();
+  if(state.view === 'study') attachSwipeHandlers();
+  renderModal();
+}
+
+function subjectMastery(subjectId){
+  const cards = state.cards.filter(c=>c.subject===subjectId);
+  if(cards.length===0) return 0;
+  const scored = cards.reduce((sum,c)=>{
+    if(!c.srs || !c.reviewCount) return sum;
+    const val = c.difficulty==='easy'?1:c.difficulty==='medium'?0.6:0.25;
+    return sum+val;
+  },0);
+  return Math.round((scored/cards.length)*100);
+}
+
+function renderHome(){
+  const due = dueCards(state.cards);
+  const goal = state.settings.dailyGoal;
+  const todayEntry = state.stats.history.find(h=>h.date===todayStr());
+  const doneToday = todayEntry ? todayEntry.total : 0;
+  const pct = Math.min(100, Math.round((doneToday/goal)*100));
+
+  const thisWeek = state.stats.history.slice(-7);
+  const lastWeek = state.stats.history.slice(-14,-7);
+  const acc = arr => arr.length ? Math.round(100*arr.reduce((s,h)=>s+h.correct,0)/Math.max(1,arr.reduce((s,h)=>s+h.total,0))) : null;
+  const accThis = acc(thisWeek), accLast = acc(lastWeek);
+  let feedback = 'Log a study session to start tracking your progress.';
+  if(accThis !== null && accLast !== null){
+    const diff = accThis - accLast;
+    feedback = diff >= 0 ? `Your accuracy improved by ${diff}% this week` : `Your accuracy dipped ${Math.abs(diff)}% this week — a quick review session helps`;
+  } else if(accThis !== null){
+    feedback = `You're at ${accThis}% accuracy this week. Keep going!`;
+  }
+
+  return `
+  <div class="topbar">
+    <div class="brand">Rec<span>all</span></div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <div class="streak-pill flame">🔥 ${state.stats.streak}</div>
+      <button class="icon-btn" data-action="open-settings">⚙️</button>
+    </div>
+  </div>
+  <div class="screen" style="padding-top:0;">
+    <div class="greeting">Good ${greetingTime()}, ${escapeHtml(state.settings.name)}</div>
+    <div class="sub">Level ${level()} · ${state.stats.xp} XP</div>
+
+    <div class="card goal-card">
+      <div class="row-between"><strong>Today's goal</strong><span class="xp-pill">${doneToday}/${goal} cards</span></div>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <div class="row-between" style="margin-top:8px;">
+        <span class="sub" style="margin:0;">Cards to review: <strong style="color:var(--text)">${due.length}</strong></span>
+        ${due.length>0 ? `<button class="btn btn-primary btn-sm" data-action="start-due-study">Start</button>` : `<span class="sub" style="margin:0;">All caught up ✨</span>`}
+      </div>
+    </div>
+
+    <h2 class="section-title">Subjects</h2>
+    <div class="card" style="padding:8px 16px;">
+      ${state.subjects.map(s=>{
+        const count = state.cards.filter(c=>c.subject===s.id).length;
+        return `<div class="subject-row">
+          <div class="subject-name"><span class="dot" style="background:${s.color}"></span>${s.icon} ${escapeHtml(s.name)}</div>
+          <div class="subject-pct">${count} cards · ${subjectMastery(s.id)}%</div>
+        </div>`
