@@ -128,7 +128,6 @@
   .rating-hard{ background:var(--red); }
   .rating-medium{ background:var(--gold); }
   .rating-easy{ background:var(--green); }
-
   .empty-state{ text-align:center; padding:60px 20px; color:var(--text-dim); }
   .empty-state .big-emoji{ font-size:44px; margin-bottom:10px; }
 
@@ -401,4 +400,605 @@ function renderHome(){
         return `<div class="subject-row">
           <div class="subject-name"><span class="dot" style="background:${s.color}"></span>${s.icon} ${escapeHtml(s.name)}</div>
           <div class="subject-pct">${count} cards · ${subjectMastery(s.id)}%</div>
-        </div>`
+        </div>`;
+      }).join('')}
+    </div>
+
+    <h2 class="section-title">Weekly feedback</h2>
+    <div class="feedback-banner">💬 ${feedback}</div>
+
+    <div class="card">
+      <strong style="font-size:14px;">Accuracy — last 4 weeks</strong>
+      <canvas id="accuracyChart" width="480" height="120"></canvas>
+    </div>
+  </div>`;
+}
+
+function greetingTime(){
+  const h = new Date().getHours();
+  return h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
+}
+
+function drawAccuracyChart(){
+  const canvas = document.getElementById('accuracyChart');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+  const hist = state.stats.history.slice(-28);
+  if(hist.length < 1){
+    ctx.fillStyle = getCss('--text-dim'); ctx.font='13px sans-serif';
+    ctx.fillText('No data yet — study today to begin your graph', 8, h/2);
+    return;
+  }
+  const points = hist.map(d => d.total ? (d.correct/d.total)*100 : 0);
+  const max = 100, min = 0;
+  const stepX = w / Math.max(1, points.length - 1);
+  ctx.strokeStyle = getCss('--accent'); ctx.lineWidth = 2.5; ctx.beginPath();
+  points.forEach((p,i)=>{
+    const x = i*stepX;
+    const y = h - ((p-min)/(max-min))*(h-16) - 8;
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = getCss('--accent');
+  points.forEach((p,i)=>{
+    const x = i*stepX; const y = h - ((p-min)/(max-min))*(h-16) - 8;
+    ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill();
+  });
+}
+function getCss(varName){ return getComputedStyle(document.body).getPropertyValue(varName).trim(); }
+
+function renderBrowse(){
+  const f = state.browseFilter;
+  let cards = [...state.cards];
+  if(f.subject) cards = cards.filter(c=>c.subject===f.subject);
+  if(f.tag) cards = cards.filter(c=>(c.tags||[]).includes(f.tag));
+  if(f.query) cards = cards.filter(c=> (c.question+c.answer).toLowerCase().includes(f.query.toLowerCase()));
+  if(f.sort==='recent') cards.sort((a,b)=>b.createdAt-a.createdAt);
+  if(f.sort==='difficulty'){ const rank={hard:0,medium:1,easy:2,undefined:3}; const rk=k=> (rank[k]!==undefined ? rank[k] : 3); cards.sort((a,b)=> rk(a.difficulty)-rk(b.difficulty)); }
+  if(f.sort==='subject') cards.sort((a,b)=>(a.subject||'').localeCompare(b.subject||''));
+  if(f.sort==='reviewed') cards.sort((a,b)=>(b.reviewCount||0)-(a.reviewCount||0));
+
+  return `
+  <div class="topbar"><div class="brand">Browse</div></div>
+  <div class="screen" style="padding-top:0;">
+    <div class="search-bar">
+      <input type="text" placeholder="Search cards..." value="${escapeAttr(f.query)}" oninput="onSearchInput(this.value)">
+    </div>
+    <div class="filter-bar">
+      <div class="chip ${!f.subject?'selected':''}" data-action="filter-subject" data-val="">All</div>
+      ${state.subjects.map(s=>`<div class="chip ${f.subject===s.id?'selected':''}" data-action="filter-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)}</div>`).join('')}
+    </div>
+    <div class="filter-bar">
+      <div class="chip ${!f.tag?'selected':''}" data-action="filter-tag" data-val="">All tags</div>
+      ${allTags().map(t=>`<div class="chip ${f.tag===t?'selected':''}" data-action="filter-tag" data-val="${t}">${escapeHtml(t)}</div>`).join('')}
+    </div>
+    <select onchange="onSortChange(this.value)">
+      <option value="recent" ${f.sort==='recent'?'selected':''}>Recently created</option>
+      <option value="difficulty" ${f.sort==='difficulty'?'selected':''}>Difficulty</option>
+      <option value="subject" ${f.sort==='subject'?'selected':''}>Subject</option>
+      <option value="reviewed" ${f.sort==='reviewed'?'selected':''}>Most reviewed</option>
+    </select>
+
+    ${cards.length===0 ? `<div class="empty-state"><div class="big-emoji">🗂️</div>No cards match yet.<br>Tap + to add your first card.</div>` : cards.map(c=>renderListCard(c)).join('')}
+  </div>`;
+}
+
+function allTags(){
+  const set = new Set(DEFAULT_TAGS);
+  state.cards.forEach(c=>(c.tags||[]).forEach(t=>set.add(t)));
+  return [...set];
+}
+
+function renderListCard(c){
+  const subj = state.subjects.find(s=>s.id===c.subject);
+  return `<div class="list-card" data-action="edit-card" data-val="${c.id}">
+    <div class="list-card-top">
+      <div style="flex:1;">
+        <div class="list-q">${escapeHtml(c.question)}</div>
+        <div class="list-a">${escapeHtml(c.answer)}</div>
+        <div>
+          ${subj ? `<span class="tag-mini" style="color:${subj.color}">${subj.icon} ${escapeHtml(subj.name)}</span>` : ''}
+          ${(c.tags||[]).map(t=>`<span class="tag-mini">${escapeHtml(t)}</span>`).join('')}
+          ${c.priority ? `<span class="tag-mini" style="color:var(--gold)">⭐ Priority</span>` : ''}
+        </div>
+      </div>
+      <button class="icon-btn" data-action="delete-card" data-val="${c.id}" onclick="event.stopPropagation()">🗑️</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------- Study mode ---------------- */
+function startStudySession(cardIds){
+  if(cardIds.length===0){ return; }
+  state.studySession = { ids: shuffle([...cardIds]), index:0, flipped:false, results:[] };
+  state.view = 'study';
+  render();
+}
+function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+  function renderStudy(){
+  const s = state.studySession;
+  if(!s) return `<div class="screen empty-state"><div class="big-emoji">📚</div>No active session.</div>`;
+  if(s.index >= s.ids.length){
+    const known = s.results.filter(r=>r!=='hard').length;
+    return `<div class="screen">
+      <div class="exam-result">
+        <div class="big-emoji">🎉</div>
+        <div class="exam-score">${known}/${s.results.length}</div>
+        <div class="sub">cards marked as known</div>
+        <button class="btn btn-primary" style="margin-top:20px;" data-action="go-home">Back to dashboard</button>
+      </div>
+    </div>`;
+  }
+  const card = state.cards.find(c=>c.id===s.ids[s.index]);
+  const subj = state.subjects.find(sj=>sj.id===card.subject);
+  const progressSegs = s.ids.map((_,i)=>`<div class="seg ${i<s.index?'done':''}"></div>`).join('');
+
+  return `
+  <div class="topbar"><button class="icon-btn" data-action="exit-study">✕</button><div class="brand" style="font-size:16px;">Study</div><div style="width:38px"></div></div>
+  <div class="screen" style="padding-top:0;">
+    <div class="study-progress">${progressSegs}</div>
+    <div class="study-wrap">
+      <div class="swipe-card" id="swipeCard" data-flipped="${s.flipped}">
+        ${subj ? `<span class="badge" style="background:${subj.color}22; color:${subj.color}">${subj.icon} ${escapeHtml(subj.name)}</span>` : ''}
+        ${card.hint ? `<button class="icon-btn hint-btn" data-action="show-hint" title="Hint">💡</button>` : ''}
+        <div class="stamp know" id="stampKnow">KNOW IT</div>
+        <div class="stamp practice" id="stampPractice">PRACTICE</div>
+        ${card.image ? `<img class="card-img" src="${card.image}">` : ''}
+        ${!s.flipped ? `<div class="qtext">${escapeHtml(card.question)}</div><div class="tap-hint">Tap card to flip · swipe right = know it · left = practice</div>`
+          : `<div class="atext">${escapeHtml(card.answer)}</div>`}
+      </div>
+      ${s.flipped ? `<div class="rating-row">
+          <button class="rating-btn rating-hard" data-action="rate" data-val="hard">Hard</button>
+          <button class="rating-btn rating-medium" data-action="rate" data-val="medium">Medium</button>
+          <button class="rating-btn rating-easy" data-action="rate" data-val="easy">Easy</button>
+        </div>` : ''}
+    </div>
+  </div>`;
+}
+
+/* Single shared drag-state object + ONE set of window-level listeners bound once
+   for the lifetime of the app. attachSwipeHandlers() just re-points drag.el on
+   every render instead of re-registering window listeners (avoids a listener
+   leak that would make swiping feel laggier the longer a study session runs). */
+const drag = { active:false, el:null, startX:0, startY:0, dx:0, moved:false };
+
+function dragMove(x,y){
+  if(!drag.active || !drag.el) return;
+  drag.dx = x - drag.startX;
+  const dy = y - drag.startY;
+  if(Math.abs(dy) > Math.abs(drag.dx)*1.5) return;
+  drag.moved = true;
+  const know = document.getElementById('stampKnow');
+  const practice = document.getElementById('stampPractice');
+  drag.el.style.transform = `translateX(${drag.dx}px) rotate(${drag.dx/20}deg)`;
+  if(know) know.style.opacity = Math.max(0, drag.dx/80);
+  if(practice) practice.style.opacity = Math.max(0, -drag.dx/80);
+}
+function dragEnd(){
+  if(!drag.active || !drag.el) return;
+  drag.active = false;
+  const el = drag.el;
+  el.style.transition = 'transform .25s ease';
+  if(drag.dx > 90){
+    el.style.transform = `translateX(600px) rotate(20deg)`;
+    setTimeout(()=>quickRate('easy'), 180);
+  } else if(drag.dx < -90){
+    el.style.transform = `translateX(-600px) rotate(-20deg)`;
+    setTimeout(()=>quickRate('hard'), 180);
+  } else {
+    el.style.transform = 'translateX(0) rotate(0)';
+    const know = document.getElementById('stampKnow');
+    const practice = document.getElementById('stampPractice');
+    if(know) know.style.opacity=0; if(practice) practice.style.opacity=0;
+  }
+  drag.dx = 0;
+}
+// Bound exactly once, ever.
+window.addEventListener('mousemove', e=> dragMove(e.clientX, e.clientY));
+window.addEventListener('mouseup', dragEnd);
+
+function attachSwipeHandlers(){
+  const el = document.getElementById('swipeCard');
+  if(!el) return;
+  drag.el = el; drag.active = false; drag.dx = 0; drag.moved = false;
+
+  el.addEventListener('touchstart', e=>{ drag.active=true; drag.moved=false; drag.startX=e.touches[0].clientX; drag.startY=e.touches[0].clientY; el.style.transition='none'; }, {passive:true});
+  el.addEventListener('touchmove', e=>{
+    dragMove(e.touches[0].clientX, e.touches[0].clientY);
+    if(Math.abs(drag.dx) > 10) e.preventDefault();
+  }, {passive:false});
+  el.addEventListener('touchend', dragEnd);
+  el.addEventListener('mousedown', e=>{ drag.active=true; drag.moved=false; drag.startX=e.clientX; drag.startY=e.clientY; el.style.transition='none'; });
+  el.addEventListener('click', ()=>{
+    if(drag.moved) return;
+    flipCard();
+  });
+}
+
+function flipCard(){
+  const s = state.studySession; if(!s) return;
+  s.flipped = !s.flipped;
+  render();
+}
+function quickRate(rating){
+  const s = state.studySession; if(!s) return;
+  const card = state.cards.find(c=>c.id===s.ids[s.index]);
+  rateCard(card, s.flipped ? rating : rating); // if not flipped yet (swipe before flip), still rate
+  s.results.push(rating);
+  s.index += 1;
+  s.flipped = false;
+  render();
+}
+
+/* ---------------- Exam mode ---------------- */
+function renderExamSetup(){
+  return `
+  <div class="topbar"><div class="brand">Exam mode</div></div>
+  <div class="screen" style="padding-top:0;">
+    <div class="card">
+      <label class="field-label">Subject / Folder</label>
+      <select id="examSubject">
+        <option value="">All subjects</option>
+        ${state.subjects.map(s=>`<option value="${s.id}">${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
+      </select>
+      <label class="field-label">Number of questions</label>
+      <input type="number" id="examCount" value="10" min="3" max="100">
+      <label class="field-label">Seconds per question</label>
+      <input type="number" id="examTimer" value="20" min="5" max="120">
+      <label class="field-label"><input type="checkbox" id="examPriorityOnly" style="width:auto; margin-right:8px;">Priority cards only</label>
+      <button class="btn btn-primary btn-block" data-action="begin-exam">Start exam</button>
+    </div>
+  </div>`;
+}
+
+function renderExamSession(){
+  const s = state.examSession;
+  if(!s) return renderExamSetup();
+  const card = s.cards[s.index];
+  return `
+  <div class="topbar"><button class="icon-btn" data-action="exit-exam">✕</button><div class="timer-badge" id="examTimerBadge">${s.timeLeft}s</div><div class="brand" style="font-size:14px;">${s.index+1}/${s.cards.length}</div></div>
+  <div class="screen" style="padding-top:0;">
+    <div class="study-progress">${s.cards.map((_,i)=>`<div class="seg ${i<s.index?'done':''}"></div>`).join('')}</div>
+    <div class="swipe-card" style="cursor:default;">
+      ${card.image ? `<img class="card-img" src="${card.image}">` : ''}
+      ${!s.revealed ? `<div class="qtext">${escapeHtml(card.question)}</div>`
+        : `<div class="atext">${escapeHtml(card.answer)}</div>`}
+    </div>
+    ${!s.revealed
+      ? `<button class="btn btn-primary btn-block" style="margin-top:16px;" data-action="reveal-exam">Show answer</button>`
+      : `<div class="rating-row">
+           <button class="rating-btn rating-hard" data-action="exam-mark" data-val="wrong">Got it wrong</button>
+           <button class="rating-btn rating-easy" data-action="exam-mark" data-val="right">Got it right</button>
+         </div>`}
+  </div>`;
+}
+
+function renderExamResult(){
+  const r = state.examSession;
+  const pct = Math.round(100*r.score/r.cards.length);
+  return `<div class="screen">
+    <div class="exam-result">
+      <div class="big-emoji">${pct>=80?'🏆':pct>=50?'👍':'💪'}</div>
+      <div class="exam-score">${r.score}/${r.cards.length}</div>
+      <div class="sub">${pct}% correct</div>
+      <button class="btn btn-primary" style="margin-top:20px;" data-action="go-home">Back to dashboard</button>
+    </div>
+  </div>`;
+}
+
+let examTimerInterval = null;
+function beginExam(){
+  const subjectId = document.getElementById('examSubject').value;
+  const count = parseInt(document.getElementById('examCount').value)||10;
+  const perQ = parseInt(document.getElementById('examTimer').value)||20;
+  const priorityOnly = document.getElementById('examPriorityOnly').checked;
+  let pool = state.cards.filter(c=> (!subjectId || c.subject===subjectId) && (!priorityOnly || c.priority));
+  pool = shuffle([...pool]).slice(0, count);
+  if(pool.length===0){ alert('No cards match those filters yet.'); return; }
+  state.examSession = { cards: pool, index:0, revealed:false, score:0, perQ, timeLeft: perQ };
+  state.view = 'examSession';
+  render();
+  startExamTimer();
+}
+function startExamTimer(){
+  clearInterval(examTimerInterval);
+  examTimerInterval = setInterval(()=>{
+    const s = state.examSession; if(!s || s.revealed){ return; }
+    s.timeLeft -= 1;
+    const badge = document.getElementById('examTimerBadge');
+    if(badge) badge.textContent = s.timeLeft+'s';
+    if(s.timeLeft <= 0){ s.revealed = true; render(); }
+  }, 1000);
+}
+function nextExamQuestion(){
+  const s = state.examSession;
+  s.index += 1; s.revealed = false; s.timeLeft = s.perQ;
+  if(s.index >= s.cards.length){
+    clearInterval(examTimerInterval);
+    state.view = 'examResult';
+  }
+  render();
+  if(state.view==='examSession') startExamTimer();
+}
+
+/* ---------------- Bottom nav ---------------- */
+function renderBottomNav(){
+  const tab = (name,icon,label)=>`<button class="navbtn ${state.view===name?'active':''}" data-action="nav" data-val="${name}"><span class="navicon">${icon}</span>${label}</button>`;
+  return `<div class="bottomnav">
+    ${tab('home','🏠','Home')}
+    ${tab('browse','🗂️','Browse')}
+    <div class="fab" data-action="open-add">+</div>
+    <div style="flex:1"></div>
+    ${tab('exam','⏱️','Exam')}
+  </div>`;
+}
+
+/* ---------------- Modals: Add/Edit card, Import, Settings ---------------- */
+let modalState = null; // 'add' | 'import' | 'settings' | null
+
+function renderModal(){
+  const existing = document.getElementById('modalRoot');
+  if(existing) existing.remove();
+  if(!modalState) return;
+  const div = document.createElement('div');
+  div.id = 'modalRoot';
+  div.className = 'modal-overlay';
+  div.innerHTML = modalState==='add' ? addEditModalHtml() : modalState==='import' ? importModalHtml() : settingsModalHtml();
+  div.addEventListener('click', (e)=>{ if(e.target===div){ modalState=null; state.editingCard=null; render(); } });
+  document.body.appendChild(div);
+  attachModalHandlers();
+}
+
+function addEditModalHtml(){
+  const editing = state.editingCard;
+  const c = editing || { question:'', answer:'', hint:'', subject: (state.subjects[0] ? state.subjects[0].id : undefined), tags:[], image:null, priority:false };
+  const [activeTab] = [window._addTab || 'manual'];
+  return `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${editing ? 'Edit card' : 'Add cards'}</div>
+    ${!editing ? `<div class="tabbar-inline">
+      <button class="${activeTab==='manual'?'active':''}" data-action="add-tab" data-val="manual">Manual</button>
+      <button class="${activeTab==='import'?'active':''}" data-action="add-tab" data-val="import">Paste import</button>
+    </div>` : ''}
+    <div id="addTabBody">
+      ${(editing || activeTab==='manual') ? manualFormHtml(c, editing) : importFormHtml()}
+    </div>
+  </div>`;
+}
+
+function manualFormHtml(c, editing){
+  return `
+    <label class="field-label">Question</label>
+    <textarea id="fQuestion" placeholder="e.g. What is the powerhouse of the cell?">${escapeHtml(c.question)}</textarea>
+    <label class="field-label">Answer</label>
+    <textarea id="fAnswer" placeholder="e.g. The mitochondria">${escapeHtml(c.answer)}</textarea>
+    <label class="field-label">Hint (optional)</label>
+    <input type="text" id="fHint" value="${escapeAttr(c.hint||'')}" placeholder="A gentle nudge...">
+    <label class="field-label">Image (optional)</label>
+    <input type="file" id="fImage" accept="image/*">
+    ${c.image ? `<img src="${c.image}" style="max-width:100%; max-height:100px; border-radius:10px; margin-bottom:10px;">` : ''}
+    <label class="field-label">Subject</label>
+    <select id="fSubject">
+      ${state.subjects.map(s=>`<option value="${s.id}" ${c.subject===s.id?'selected':''}>${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
+    </select>
+    <label class="field-label">Tags</label>
+    <div class="chip-row" id="fTags">
+      ${allTags().map(t=>`<div class="chip ${((c.tags)||[]).includes(t)?'selected':''}" data-tag="${escapeAttr(t)}">${escapeHtml(t)}</div>`).join('')}
+    </div>
+    <label class="field-label"><input type="checkbox" id="fPriority" ${c.priority?'checked':''} style="width:auto; margin-right:8px;">Mark as high priority</label>
+    <button class="btn btn-primary btn-block" data-action="${editing?'save-edit':'save-new'}" data-val="${editing?editing.id:''}">${editing?'Save changes':'Add card'}</button>
+    ${editing ? `<button class="btn btn-ghost btn-block" style="margin-top:8px;" data-action="close-modal">Cancel</button>` : ''}
+  `;
+}
+
+function importFormHtml(){
+  return `
+    <label class="field-label">Paste your Q&A text</label>
+    <textarea id="fImportText" placeholder="Paste up to 100+ pairs. Works with:&#10;Q: ...  A: ...&#10;— or —&#10;question [TAB] answer per line&#10;— or —&#10;question&#10;answer&#10;(blank line between cards)" style="min-height:160px;"></textarea>
+    <label class="field-label">Assign to subject</label>
+    <select id="fImportSubject">
+      ${state.subjects.map(s=>`<option value="${s.id}">${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
+    </select>
+    <button class="btn btn-primary btn-block" data-action="preview-import">Preview cards</button>
+    <div id="importPreview"></div>
+  `;
+}
+
+function importModalHtml(){ return addEditModalHtml(); }
+
+function settingsModalHtml(){
+  const s = state.settings;
+  return `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Settings</div>
+    <label class="field-label">Your name</label>
+    <input type="text" id="setName" value="${escapeAttr(s.name)}">
+    <label class="field-label">Daily goal (cards)</label>
+    <input type="number" id="setGoal" value="${s.dailyGoal}" min="5" max="200">
+    <label class="field-label">Theme</label>
+    <div class="chip-row">
+      <div class="chip ${s.theme==='dark'?'selected':''}" data-action="set-theme" data-val="dark">🌙 Dark</div>
+      <div class="chip ${s.theme==='light'?'selected':''}" data-action="set-theme" data-val="light">☀️ Light</div>
+    </div>
+    <button class="btn btn-primary btn-block" data-action="save-settings">Save</button>
+    <h2 class="section-title">Data</h2>
+    <button class="btn btn-outline btn-block" data-action="export-data">Export all data (backup)</button>
+  </div>`;
+}
+
+/* ---------------- Event handling ---------------- */
+function attachGlobalHandlers(){
+  app.querySelectorAll('[data-action]').forEach(el=>{
+    el.addEventListener('click', handleAction);
+  });
+}
+function attachModalHandlers(){
+  document.querySelectorAll('#modalRoot [data-action]').forEach(el=>{
+    el.addEventListener('click', handleAction);
+  });
+  document.querySelectorAll('#fTags .chip').forEach(el=>{
+    el.addEventListener('click', ()=> el.classList.toggle('selected'));
+  });
+}
+
+function handleAction(e){
+  const el = e.currentTarget;
+  const action = el.dataset.action;
+  const val = el.dataset.val;
+
+  if(action==='nav'){ state.view = val; state.studySession=null; render(); return; }
+  if(action==='go-home'){ state.view='home'; state.studySession=null; state.examSession=null; render(); return; }
+  if(action==='open-add'){ modalState='add'; window._addTab='manual'; state.editingCard=null; render(); return; }
+  if(action==='open-settings'){ modalState='settings'; render(); return; }
+  if(action==='close-modal'){ modalState=null; state.editingCard=null; render(); return; }
+  if(action==='add-tab'){ window._addTab = val; render(); return; }
+
+  if(action==='save-new'){ saveNewCard(); return; }
+  if(action==='save-edit'){ saveEditCard(val); return; }
+  if(action==='edit-card'){ state.editingCard = state.cards.find(c=>c.id===val); modalState='add'; render(); return; }
+  if(action==='delete-card'){
+    if(confirm('Delete this card?')){ state.cards = state.cards.filter(c=>c.id!==val); persistAll(); render(); }
+    return;
+  }
+  if(action==='preview-import'){ previewImport(); return; }
+  if(action==='confirm-import'){ confirmImport(); return; }
+
+  if(action==='filter-subject'){ state.browseFilter.subject = val||null; render(); return; }
+  if(action==='filter-tag'){ state.browseFilter.tag = val||null; render(); return; }
+
+  if(action==='start-due-study'){ startStudySession(dueCards(state.cards).map(c=>c.id)); return; }
+  if(action==='exit-study'){ state.view='home'; state.studySession=null; render(); return; }
+  if(action==='show-hint'){ const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]); if(card.hint) alert('Hint: '+card.hint); return; }
+  if(action==='rate'){ const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]); rateCard(card,val); s.results.push(val); s.index+=1; s.flipped=false; persistAll(); render(); return; }
+
+  if(action==='begin-exam'){ beginExam(); return; }
+  if(action==='exit-exam'){ clearInterval(examTimerInterval); state.view='home'; state.examSession=null; render(); return; }
+  if(action==='reveal-exam'){ state.examSession.revealed = true; render(); return; }
+  if(action==='exam-mark'){
+    if(val==='right') state.examSession.score += 1;
+    nextExamQuestion();
+    return;
+  }
+
+  if(action==='set-theme'){ state.settings.theme = val; document.body.setAttribute('data-theme', val); render(); return; }
+  if(action==='save-settings'){ saveSettings(); return; }
+  if(action==='export-data'){ exportData(); return; }
+}
+
+function onSearchInput(v){ state.browseFilter.query = v; render(); var _si = document.querySelector('.search-bar input'); if(_si) _si.focus(); }
+function onSortChange(v){ state.browseFilter.sort = v; render(); }
+
+function readImageInput(inputEl){
+  return new Promise(resolve=>{
+    const file = inputEl.files && inputEl.files[0];
+    if(!file){ resolve(null); return; }
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function saveNewCard(){
+  const q = document.getElementById('fQuestion').value.trim();
+  const a = document.getElementById('fAnswer').value.trim();
+  if(!q || !a){ alert('Please fill in both question and answer.'); return; }
+  const hint = document.getElementById('fHint').value.trim();
+  const subject = document.getElementById('fSubject').value;
+  const priority = document.getElementById('fPriority').checked;
+  const tags = [...document.querySelectorAll('#fTags .chip.selected')].map(c=>c.dataset.tag);
+  const image = await readImageInput(document.getElementById('fImage'));
+  state.cards.push({
+    id: uid(), question:q, answer:a, hint, subject, tags, priority, image: image||null,
+    createdAt: Date.now(), reviewCount:0, difficulty:null, srs: initSRS()
+  });
+  persistAll();
+  modalState = null; state.view='browse'; render();
+}
+
+async function saveEditCard(id){
+  const c = state.cards.find(x=>x.id===id);
+  if(!c) return;
+  c.question = document.getElementById('fQuestion').value.trim();
+  c.answer = document.getElementById('fAnswer').value.trim();
+  c.hint = document.getElementById('fHint').value.trim();
+  c.subject = document.getElementById('fSubject').value;
+  c.priority = document.getElementById('fPriority').checked;
+  c.tags = [...document.querySelectorAll('#fTags .chip.selected')].map(x=>x.dataset.tag);
+  const newImage = await readImageInput(document.getElementById('fImage'));
+  if(newImage) c.image = newImage;
+  persistAll();
+  modalState = null; state.editingCard = null; render();
+}
+
+let lastPreviewedCards = [];
+function previewImport(){
+  const text = document.getElementById('fImportText').value;
+  const cards = parseImportText(text);
+  lastPreviewedCards = cards;
+  const box = document.getElementById('importPreview');
+  if(cards.length===0){
+    box.innerHTML = `<div class="feedback-banner">Couldn't detect card pairs. Try one per line as <em>question&nbsp;&#8594;TAB&#8594;&nbsp;answer</em>, or use Q: / A: labels.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="feedback-banner">Found ${cards.length} card${cards.length>1?'s':''} ✅</div>
+    ${cards.slice(0,6).map(c=>`<div class="list-card"><div class="list-q">${escapeHtml(c.question)}</div><div class="list-a">${escapeHtml(c.answer)}</div></div>`).join('')}
+    ${cards.length>6 ? `<div class="sub">+ ${cards.length-6} more...</div>` : ''}
+    <button class="btn btn-primary btn-block" style="margin-top:10px;" data-action="confirm-import">Import ${cards.length} card${cards.length>1?'s':''}</button>`;
+  document.querySelector('[data-action="confirm-import"]').addEventListener('click', handleAction);
+}
+function confirmImport(){
+  const subject = document.getElementById('fImportSubject').value;
+  lastPreviewedCards.forEach(c=>{
+    state.cards.push({
+      id: uid(), question:c.question, answer:c.answer, hint:'', subject, tags:[], priority:false, image:null,
+      createdAt: Date.now()+Math.random(), reviewCount:0, difficulty:null, srs: initSRS()
+    });
+  });
+  persistAll();
+  lastPreviewedCards = [];
+  modalState = null; state.view='browse'; render();
+}
+
+function saveSettings(){
+  state.settings.name = document.getElementById('setName').value.trim() || 'there';
+  state.settings.dailyGoal = parseInt(document.getElementById('setGoal').value)||20;
+  persistAll();
+  modalState = null; render();
+}
+function exportData(){
+  const blob = new Blob([JSON.stringify({cards:state.cards, subjects:state.subjects, stats:state.stats}, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'recall-backup.json'; a.click();
+}
+
+/* ---------------- Utils ---------------- */
+function escapeHtml(str){
+  return String(str===null || str===undefined ? '' : str).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+function escapeAttr(str){ return escapeHtml(str); }
+
+window.addEventListener('error', function(e){
+  var el = document.getElementById('app');
+  if(el && !el.dataset.crashed){
+    el.dataset.crashed = '1';
+    el.innerHTML = '<div style="padding:24px; color:#fff; font-family:monospace; font-size:13px; white-space:pre-wrap;">'
+      + 'Something went wrong loading Recall.\n\nError: ' + (e.message||'unknown') + '\nLine: ' + (e.lineno||'?')
+      + '\n\nScreenshot this and send it back so it can be fixed.</div>';
+  }
+});
+
+try{
+  render();
+}catch(e){
+  var el = document.getElementById('app');
+  if(el){
+    el.innerHTML = '<div style="padding:24px; color:#fff; font-family:monospace; font-size:13px; white-space:pre-wrap;">'
+      + 'Something went wrong loading Recall.\n\nError: ' + (e.message||e) + '\n\nScreenshot this and send it back so it can be fixed.</div>';
+  }
+}
+</script>
+</body>
+</html>
