@@ -122,12 +122,18 @@
   .stamp{ position:absolute; font-weight:900; font-size:28px; letter-spacing:.05em; border:4px solid; padding:4px 14px; border-radius:10px; transform:rotate(-12deg); opacity:0; pointer-events:none; }
   .stamp.know{ color:var(--green); border-color:var(--green); left:24px; top:40%; }
   .stamp.practice{ color:var(--red); border-color:var(--red); right:24px; top:40%; transform:rotate(12deg); }
+  .stamp.priority-up{ color:var(--gold); border-color:var(--gold); top:20px; left:50%; transform:translateX(-50%); }
+  .stamp.revision-down{ color:var(--accent); border-color:var(--accent); bottom:60px; left:50%; transform:translateX(-50%); }
+  .bottomnav-5 .navbtn{ font-size:9.5px; }
+  .bottomnav-5 .navicon{ font-size:17px; }
+  .stale-badge{ font-size:10px; color:var(--gold); margin-left:6px; }
 
   .rating-row{ display:flex; gap:10px; width:100%; margin-top:18px; }
   .rating-btn{ flex:1; padding:13px 6px; border-radius:14px; border:none; font-weight:700; font-size:13.5px; cursor:pointer; color:#fff; }
   .rating-hard{ background:var(--red); }
   .rating-medium{ background:var(--gold); }
   .rating-easy{ background:var(--green); }
+
   .empty-state{ text-align:center; padding:60px 20px; color:var(--text-dim); }
   .empty-state .big-emoji{ font-size:44px; margin-bottom:10px; }
 
@@ -142,7 +148,7 @@
   .tag-mini{ font-size:10.5px; padding:2px 8px; border-radius:999px; background:var(--surface-2); color:var(--text-dim); margin-right:4px; display:inline-block; margin-top:6px; }
 
   /* ---------- Modal ---------- */
-  .modal-overlay{ position:fixed; inset:0; background:#000000aa; z-index:100; display:flex; align-items:flex-end; }
+.modal-overlay{ position:fixed; inset:0; background:#000000aa; z-index:100; display:flex; align-items:flex-end; }
   .modal-sheet{ background:var(--bg); width:100%; max-width:520px; margin:0 auto; border-radius:24px 24px 0 0;
     max-height:92vh; overflow-y:auto; padding:8px 20px 28px; animation: slideUp .25s ease; }
   @keyframes slideUp{ from{transform:translateY(30px); opacity:.4} to{transform:translateY(0); opacity:1} }
@@ -172,12 +178,15 @@
 const STORE_KEYS = { cards:'fc_cards', subjects:'fc_subjects', settings:'fc_settings', stats:'fc_stats' };
 
 const DEFAULT_SUBJECTS = [
-  {id:'life-science', name:'Life Sciences', icon:'🧬', color:'#4ADE80'},
-  {id:'physics', name:'Physics', icon:'⚛️', color:'#60A5FA'},
-  {id:'maths', name:'Mathematics', icon:'📐', color:'#FFB74D'},
-  {id:'geography', name:'Geography', icon:'🌍', color:'#F472B6'},
-  {id:'chemistry', name:'Chemistry', icon:'⚗️', color:'#7C6FFF'},
+  {id:'life-science', name:'Life Sciences', icon:'🧬', color:'#4ADE80', topics:[]},
+  {id:'physics', name:'Physics', icon:'⚛️', color:'#60A5FA', topics:[]},
+  {id:'maths', name:'Mathematics', icon:'📐', color:'#FFB74D', topics:[]},
+  {id:'geography', name:'Geography', icon:'🌍', color:'#F472B6', topics:[]},
+  {id:'chemistry', name:'Chemistry', icon:'⚗️', color:'#7C6FFF', topics:[]},
 ];
+const MAX_SUBJECTS = 30;
+const MAX_TOPICS_PER_SUBJECT = 25;
+const CARD_COLORS = ['#7C6FFF','#4ADE80','#F87171','#FFB74D','#60A5FA','#F472B6','#A78BFA','#34D399'];
 
 const DEFAULT_TAGS = ['Hard','Need Revision','Exam Favourite'];
 
@@ -196,20 +205,43 @@ function save(key, val){
 let state = {
   cards: load(STORE_KEYS.cards, []),
   subjects: load(STORE_KEYS.subjects, DEFAULT_SUBJECTS),
-  settings: load(STORE_KEYS.settings, { theme:'dark', name:'there', dailyGoal:20 }),
-  stats: load(STORE_KEYS.stats, { streak:0, lastStudyDate:null, xp:0, history:[] }),
+  settings: load(STORE_KEYS.settings, { theme:'dark', name:'there', dailyGoal:20, weeklyGoals:{}, direction:'forward' }),
+  stats: load(STORE_KEYS.stats, { streak:0, lastStudyDate:null, xp:0, history:[], freezeAvailable:true, freezeWeekStart:null, reviewLog:[] }),
   view: 'home',
   studySession: null,
   examSession: null,
   editingCard: null,
-  browseFilter: { subject:null, tag:null, sort:'recent', query:'' },
+  browseFilter: { subject:null, topic:null, tag:null, sort:'recent', query:'' },
 };
+let lastAction = null; // single-level undo: { type, cardId, snapshot, xpDelta }
 
 function persistAll(){
   save(STORE_KEYS.cards, state.cards);
   save(STORE_KEYS.subjects, state.subjects);
   save(STORE_KEYS.settings, state.settings);
   save(STORE_KEYS.stats, state.stats);
+  scheduleRevisionReminder();
+}
+
+/* Revision reminders: only runs inside the packaged app (Capacitor), where the
+   @capacitor/local-notifications plugin is available. In a plain browser preview
+   this silently does nothing — there's no notification API to fall back to. */
+function scheduleRevisionReminder(){
+  try{
+    const LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
+    if(!LN) return;
+    const revisionCount = state.cards.filter(c=>c.revision).length;
+    LN.cancel({ notifications: [{ id: 9001 }] }).catch(()=>{});
+    if(revisionCount === 0) return;
+    LN.schedule({
+      notifications: [{
+        id: 9001,
+        title: 'Recall',
+        body: `You have ${revisionCount} card${revisionCount>1?'s':''} marked for revision — quick review?`,
+        schedule: { on: { hour: 18, minute: 0 }, repeats: true }
+      }]
+    }).catch(()=>{});
+  }catch(e){ /* no-op — never let a notification failure break the app */ }
 }
 
 document.body.setAttribute('data-theme', state.settings.theme);
@@ -217,8 +249,11 @@ document.body.setAttribute('data-theme', state.settings.theme);
 /* ---------------- Spaced repetition ---------------- */
 function initSRS(){ return { interval:0, ease:2.5, dueDate: todayStr(), reps:0, lapses:0 }; }
 
-function rateCard(card, rating){
+function rateCard(card, rating, skipUndo){
   if(!card.srs) card.srs = initSRS();
+  if(!skipUndo){
+    lastAction = { type:'rate', cardId: card.id, snapshot: JSON.parse(JSON.stringify({srs:card.srs, difficulty:card.difficulty, reviewCount:card.reviewCount, lastReviewed:card.lastReviewed, revision:card.revision, revisionStreak:card.revisionStreak})), xpDelta:0, historyDate: todayStr() };
+  }
   let s = card.srs;
   if(rating === 'hard'){
     s.interval = 1;
@@ -238,9 +273,11 @@ function rateCard(card, rating){
   card.difficulty = rating;
   card.reviewCount = (card.reviewCount||0) + 1;
   card.lastReviewed = todayStr();
+  applyRevisionLogic(card, rating);
 
   const xpGain = rating==='easy' ? 10 : rating==='medium' ? 6 : 3;
   state.stats.xp += xpGain;
+  if(!skipUndo) lastAction.xpDelta = xpGain;
 
   let todayEntry = state.stats.history.find(h=>h.date===todayStr());
   if(!todayEntry){ todayEntry = {date: todayStr(), correct:0, total:0}; state.stats.history.push(todayEntry); }
@@ -248,16 +285,66 @@ function rateCard(card, rating){
   if(rating !== 'hard') todayEntry.correct += 1;
   if(state.stats.history.length > 30) state.stats.history = state.stats.history.slice(-30);
 
+  if(!state.stats.reviewLog) state.stats.reviewLog = [];
+  state.stats.reviewLog.push({ date: todayStr(), subject: card.subject });
+  if(state.stats.reviewLog.length > 2000) state.stats.reviewLog = state.stats.reviewLog.slice(-2000);
+
   updateStreak();
   persistAll();
+}
+
+/* ---------------- Revision auto-graduation: 4 consecutive non-hard ratings ---------------- */
+function applyRevisionLogic(card, rating){
+  if(!card.revision) return;
+  if(rating === 'hard'){
+    card.revisionStreak = 0;
+    } else {
+    card.revisionStreak = (card.revisionStreak||0) + 1;
+    if(card.revisionStreak >= 4){
+      card.revision = false;
+      card.revisionStreak = 0;
+    }
+  }
+}
+
+function undoLastAction(){
+  if(!lastAction) return false;
+  const card = state.cards.find(c=>c.id===lastAction.cardId);
+  if(card){
+    Object.assign(card, lastAction.snapshot);
+  }
+  state.stats.xp = Math.max(0, state.stats.xp - (lastAction.xpDelta||0));
+  const entry = state.stats.history.find(h=>h.date===lastAction.historyDate);
+  if(entry && lastAction.xpDelta){
+    entry.total = Math.max(0, entry.total-1);
+  }
+  lastAction = null;
+  persistAll();
+  return true;
+}
+
+function getWeekStart(dateStr){
+  const d = new Date(dateStr);
+  const day = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - day);
+  return d.toISOString().slice(0,10);
 }
 
 function updateStreak(){
   const t = todayStr();
   if(state.stats.lastStudyDate === t) return;
+  const weekStart = getWeekStart(t);
+  if(state.stats.freezeWeekStart !== weekStart){ state.stats.freezeWeekStart = weekStart; state.stats.freezeAvailable = true; }
   if(state.stats.lastStudyDate){
     const gap = daysBetween(state.stats.lastStudyDate, t);
-    state.stats.streak = gap === 1 ? state.stats.streak + 1 : 1;
+    if(gap === 1){
+      state.stats.streak += 1;
+    } else if(gap === 2 && state.stats.freezeAvailable){
+      state.stats.streak += 1;
+      state.stats.freezeAvailable = false;
+    } else {
+      state.stats.streak = 1;
+    }
   } else {
     state.stats.streak = 1;
   }
@@ -268,6 +355,100 @@ function dueCards(list){
   const t = todayStr();
   return list.filter(c => !c.srs || !c.srs.dueDate || c.srs.dueDate <= t);
 }
+
+/* ---------------- Accuracy / weak-spot / staleness ---------------- */
+function computeAccuracy(cards){
+  const reviewed = cards.filter(c=>c.reviewCount>0);
+  if(reviewed.length === 0) return null;
+  const good = reviewed.filter(c=>c.difficulty && c.difficulty!=='hard').length;
+  return Math.round((good/reviewed.length)*100);
+}
+function weeklySubjectProgress(subjectId){
+  const log = state.stats.reviewLog || [];
+  return log.filter(e => e.subject===subjectId && daysBetween(e.date, todayStr()) < 7).length;
+}
+function weakSubjectIds(){
+  return state.subjects.filter(s=>{
+    const cards = state.cards.filter(c=>c.subject===s.id);
+    const acc = computeAccuracy(cards);
+    return acc !== null && cards.filter(c=>c.reviewCount>0).length >= 5 && acc < 60;
+  }).map(s=>s.id);
+}
+function isStale(card){
+  const ref = card.lastReviewed || todayStr(new Date(card.createdAt));
+  return daysBetween(ref, todayStr()) >= 14;
+}
+
+/* ---------------- Past paper: question+memo matching ---------------- */
+function parseNumbered(text){
+  const lines = (text||'').split(/\r?\n/);
+  const map = {};
+  let curNum = null;
+  const numRe = /^\s*(?:q(?:uestion)?\s*)?(\d{1,3})\s*[\.\)\:]\s*(.*)$/i;
+  lines.forEach(line=>{
+    const m = line.match(numRe);
+    if(m){
+      curNum = parseInt(m[1],10);
+      map[curNum] = (m[2]||'').trim();
+    } else if(curNum !== null && line.trim()){
+      map[curNum] = (map[curNum] ? map[curNum]+' ' : '') + line.trim();
+    }
+  });
+  return map;
+}
+function buildPastPaperCards(questionsText, memoText){
+  const qMap = parseNumbered(questionsText);
+  const aMap = parseNumbered(memoText || '');
+  const numbers = Object.keys(qMap).map(Number).sort((a,b)=>a-b);
+  return numbers.map(n=>({ question: qMap[n], answer: aMap[n] || '', needsAnswer: !aMap[n] }));
+}
+
+/* ---------------- Subject / topic management ---------------- */
+function addSubject(name, icon, color){
+  if(state.subjects.length >= MAX_SUBJECTS) return false;
+  state.subjects.push({ id: uid(), name, icon: icon||'📘', color: color||'#7C6FFF', topics:[] });
+  persistAll();
+  return true;
+}
+function renameSubject(id, name){
+  const s = state.subjects.find(x=>x.id===id); if(s){ s.name = name; persistAll(); }
+}
+function recolorSubject(id, color){
+  const s = state.subjects.find(x=>x.id===id); if(s){ s.color = color; persistAll(); }
+}
+function deleteSubject(id){
+  state.subjects = state.subjects.filter(s=>s.id!==id);
+  state.cards.forEach(c=>{ if(c.subject===id){ c.subject=null; c.topic=null; } });
+  persistAll();
+}
+function addTopic(subjectId, name){
+  const s = state.subjects.find(x=>x.id===subjectId);
+  if(!s) return false;
+  if(!s.topics) s.topics = [];
+  if(s.topics.length >= MAX_TOPICS_PER_SUBJECT) return false;
+  s.topics.push({ id: uid(), name });
+  persistAll();
+  return true;
+}
+function renameTopic(subjectId, topicId, name){
+  const s = state.subjects.find(x=>x.id===subjectId); if(!s) return;
+  const t = (s.topics||[]).find(x=>x.id===topicId); if(t){ t.name = name; persistAll(); }
+}
+function deleteTopic(subjectId, topicId){
+  const s = state.subjects.find(x=>x.id===subjectId); if(!s) return;
+  s.topics = (s.topics||[]).filter(t=>t.id!==topicId);
+  state.cards.forEach(c=>{ if(c.subject===subjectId && c.topic===topicId) c.topic=null; });
+  persistAll();
+}
+
+/* ---------------- Export scope as text ---------------- */
+function exportCardsAsText(cards, filename){
+  const text = cards.map(c=>`Q: ${c.question}\nA: ${c.answer}`).join('\n\n');
+  const blob = new Blob([text], {type:'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = (filename||'recall-export') + '.txt'; a.click();
+  }
 
 function level(){ return Math.floor(state.stats.xp / 100) + 1; }
 function xpIntoLevel(){ return state.stats.xp % 100; }
@@ -328,6 +509,8 @@ function render(){
   let html = '';
   if(state.view === 'home') html = renderHome();
   else if(state.view === 'browse') html = renderBrowse();
+  else if(state.view === 'revision') html = renderRevision();
+  else if(state.view === 'priority') html = renderPriority();
   else if(state.view === 'study') html = renderStudy();
   else if(state.view === 'exam') html = renderExamSetup();
   else if(state.view === 'examSession') html = renderExamSession();
@@ -355,10 +538,7 @@ function subjectMastery(subjectId){
 
 function renderHome(){
   const due = dueCards(state.cards);
-  const goal = state.settings.dailyGoal;
-  const todayEntry = state.stats.history.find(h=>h.date===todayStr());
-  const doneToday = todayEntry ? todayEntry.total : 0;
-  const pct = Math.min(100, Math.round((doneToday/goal)*100));
+  const weak = weakSubjectIds();
 
   const thisWeek = state.stats.history.slice(-7);
   const lastWeek = state.stats.history.slice(-14,-7);
@@ -376,7 +556,7 @@ function renderHome(){
   <div class="topbar">
     <div class="brand">Rec<span>all</span></div>
     <div style="display:flex; gap:8px; align-items:center;">
-      <div class="streak-pill flame">🔥 ${state.stats.streak}</div>
+      <div class="streak-pill flame">🔥 ${state.stats.streak}${state.stats.freezeAvailable?' 🛡️':''}</div>
       <button class="icon-btn" data-action="open-settings">⚙️</button>
     </div>
   </div>
@@ -385,21 +565,28 @@ function renderHome(){
     <div class="sub">Level ${level()} · ${state.stats.xp} XP</div>
 
     <div class="card goal-card">
-      <div class="row-between"><strong>Today's goal</strong><span class="xp-pill">${doneToday}/${goal} cards</span></div>
-      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <div class="row-between"><strong>Cards to review</strong><span class="xp-pill">${due.length} due</span></div>
       <div class="row-between" style="margin-top:8px;">
-        <span class="sub" style="margin:0;">Cards to review: <strong style="color:var(--text)">${due.length}</strong></span>
-        ${due.length>0 ? `<button class="btn btn-primary btn-sm" data-action="start-due-study">Start</button>` : `<span class="sub" style="margin:0;">All caught up ✨</span>`}
+        <span class="sub" style="margin:0;">Tap start to choose what to study</span>
+        ${due.length>0 ? `<button class="btn btn-primary btn-sm" data-action="open-start-picker">Start</button>` : `<span class="sub" style="margin:0;">All caught up ✨</span>`}
       </div>
     </div>
 
-    <h2 class="section-title">Subjects</h2>
+    ${weak.length>0 ? `<div class="feedback-banner" style="border-color:var(--red); background:var(--red)22;">⚠️ Weak spot: ${weak.map(id=>{ const s=state.subjects.find(x=>x.id===id); return s?escapeHtml(s.name):''; }).join(', ')} — accuracy under 60%</div>` : ''}
+
+    <h2 class="section-title">Weekly goals by subject</h2>
     <div class="card" style="padding:8px 16px;">
       ${state.subjects.map(s=>{
         const count = state.cards.filter(c=>c.subject===s.id).length;
-        return `<div class="subject-row">
-          <div class="subject-name"><span class="dot" style="background:${s.color}"></span>${s.icon} ${escapeHtml(s.name)}</div>
-          <div class="subject-pct">${count} cards · ${subjectMastery(s.id)}%</div>
+        const goal = state.settings.weeklyGoals[s.id] || 0;
+        const done = weeklySubjectProgress(s.id);
+        const pct = goal>0 ? Math.min(100, Math.round((done/goal)*100)) : 0;
+        return `<div class="subject-row" style="display:block; padding:10px 0;">
+          <div class="row-between">
+            <div class="subject-name"><span class="dot" style="background:${s.color}"></span>${s.icon} ${escapeHtml(s.name)}</div>
+            <div class="subject-pct">${count} cards · ${subjectMastery(s.id)}%</div>
+          </div>
+          ${goal>0 ? `<div class="progress-track" style="margin:6px 0 0;"><div class="progress-fill" style="width:${pct}%"></div></div><div class="sub" style="margin:2px 0 0; font-size:11.5px;">${done}/${goal} this week</div>` : `<div class="sub" style="margin:2px 0 0; font-size:11.5px;">No weekly goal set</div>`}
         </div>`;
       }).join('')}
     </div>
@@ -411,6 +598,155 @@ function renderHome(){
       <strong style="font-size:14px;">Accuracy — last 4 weeks</strong>
       <canvas id="accuracyChart" width="480" height="120"></canvas>
     </div>
+    </div>`;
+}
+
+function greetingTime(){
+  const h = new Date().getHours();
+  return h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
+}
+
+function drawAccuracyChart(){
+  const canvas = document.getElementById('accuracyChart');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+  const hist = state.stats.history.slice(-28);
+  if(hist.length < 1){
+    ctx.fillStyle = getCss('--text-dim'); ctx.font='13px sans-serif';
+    ctx.fillText('No data yet — study today to begin your graph', 8, h/2);
+    return;
+  }
+  const points = hist.map(d => d.total ? (d.correct/d.total)*100 : 0);
+  const max = 100, min = 0;
+  const stepX = w / Math.max(1, points.length - 1);
+  ctx.strokeStyle = getCss('--accent'); ctx.lineWidth = 2.5; ctx.beginPath();
+  points.forEach((p,i)=>{
+    const x = i*stepX;
+    const y = h - ((p-min)/(max-min))*(h-16) - 8;
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = getCss('--accent');
+  points.forEach((p,i)=>{
+    const x = i*stepX; const y = h - ((p-min)/(max-min))*(h-16) - 8;
+    ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill();
+  });
+}
+function getCss(varName){ return getComputedStyle(document.body).getPropertyValue(varName).trim(); }
+
+function renderBrowse(){
+  const f = state.browseFilter;
+  let cards = [...state.cards];
+  if(f.subject) cards = cards.filter(c=>c.subject===f.subject);
+  if(f.topic) cards = cards.filter(c=>c.topic===f.topic);
+  if(f.tag) cards = cards.filter(c=>(c.tags||[]).includes(f.tag));
+  if(f.query) cards = cards.filter(c=> (c.question+c.answer).toLowerCase().includes(f.query.toLowerCase()));
+  if(f.sort==='recent') cards.sort((a,b)=>b.createdAt-a.createdAt);
+  if(f.sort==='difficulty'){ const rank={hard:0,medium:1,easy:2,undefined:3}; const rk=k=> (rank[k]!==undefined ? rank[k] : 3); cards.sort((a,b)=> rk(a.difficulty)-rk(b.difficulty)); }
+  if(f.sort==='subject') cards.sort((a,b)=>(a.subject||'').localeCompare(b.subject||''));
+  if(f.sort==='reviewed') cards.sort((a,b)=>(b.reviewCount||0)-(a.reviewCount||0));
+
+  const activeSubj = state.subjects.find(s=>s.id===f.subject);
+  const topics = (activeSubj && activeSubj.topics) || [];
+
+  return `
+  <div class="topbar"><div class="brand">Browse</div>
+    <div style="display:flex; gap:6px;">
+      <button class="icon-btn" data-action="quick-add-here" title="Add card here">➕</button>
+      <button class="icon-btn" data-action="export-scope" title="Export this list">📤</button>
+    </div>
+  </div>
+  <div class="screen" style="padding-top:0;">
+    <div class="search-bar">
+      <input type="text" placeholder="Search cards..." value="${escapeAttr(f.query)}" oninput="onSearchInput(this.value)">
+    </div>
+    <div class="filter-bar">
+      <div class="chip ${!f.subject?'selected':''}" data-action="filter-subject" data-val="">All</div>
+      ${state.subjects.map(s=>`<div class="chip ${f.subject===s.id?'selected':''}" data-action="filter-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)}</div>`).join('')}
+    </div>
+    ${topics.length>0 ? `<div class="filter-bar">
+      <div class="chip ${!f.topic?'selected':''}" data-action="filter-topic" data-val="">All topics</div>
+      ${topics.map(t=>`<div class="chip ${f.topic===t.id?'selected':''}" data-action="filter-topic" data-val="${t.id}">${escapeHtml(t.name)}</div>`).join('')}
+    </div>` : ''}
+    <div class="filter-bar">
+      <div class="chip ${!f.tag?'selected':''}" data-action="filter-tag" data-val="">All tags</div>
+      ${allTags().map(t=>`<div class="chip ${f.tag===t?'selected':''}" data-action="filter-tag" data-val="${t}">${escapeHtml(t)}</div>`).join('')}
+    </div>
+    <select onchange="onSortChange(this.value)">
+      <option value="recent" ${f.sort==='recent'?'selected':''}>Recently created</option>
+      <option value="difficulty" ${f.sort==='difficulty'?'selected':''}>Difficulty</option>
+      <option value="subject" ${f.sort==='subject'?'selected':''}>Subject</option>
+      <option value="reviewed" ${f.sort==='reviewed'?'selected':''}>Most reviewed</option>
+    </select>
+
+    ${cards.length===0 ? `<div class="empty-state"><div class="big-emoji">🗂️</div>No cards match yet.<br>Tap + to add your first card.</div>` : cards.map(c=>renderListCard(c)).join('')}
+  </div>`;
+}
+
+function allTags(){
+  const set = new Set(DEFAULT_TAGS);
+  state.cards.forEach(c=>(c.tags||[]).forEach(t=>set.add(t)));
+  return [...set];
+}
+
+function renderListCard(c){
+  const subj = state.subjects.find(s=>s.id===c.subject);
+  const topic = subj && (subj.topics||[]).find(t=>t.id===c.topic);
+  return `<div class="list-card" data-action="edit-card" data-val="${c.id}" ${c.color?`style="border-left:4px solid ${c.color};"`:''}>
+    <div class="list-card-top">
+      <div style="flex:1;">
+        <div class="list-q">${escapeHtml(c.question)}${isStale(c) ? `<span class="stale-badge">🕓 stale</span>` : ''}</div>
+        <div class="list-a">${escapeHtml(c.answer)}</div>
+        <div>
+          ${subj ? `<span class="tag-mini" style="color:${subj.color}">${subj.icon} ${escapeHtml(subj.name)}</span>` : ''}
+          ${topic ? `<span class="tag-mini">📁 ${escapeHtml(topic.name)}</span>` : ''}
+          ${(c.tags||[]).map(t=>`<span class="tag-mini">${escapeHtml(t)}</span>`).join('')}
+          ${c.priority ? `<span class="tag-mini" style="color:var(--gold)">⭐ Priority</span>` : ''}
+          ${c.revision ? `<span class="tag-mini" style="color:var(--accent)">🔁 Revision</span>` : ''}
+        </div>
+      </div>
+      <button class="icon-btn" data-action="delete-card" data-val="${c.id}" onclick="event.stopPropagation()">🗑️</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------- Study mode ---------------- */
+function startStudySession(cardIds, direction){
+  if(cardIds.length===0){ return; }
+  const dir = direction || state.settings.direction || 'forward';
+  const ids = shuffle([...cardIds]);
+  const cardDirection = {};
+  ids.forEach(id=>{ cardDirection[id] = dir==='mixed' ? (Math.random()<0.5?'forward':'reverse') : dir; });
+  state.studySession = { ids, index:0, flipped:false, results:[], cardDirection };
+  state.view = 'study';
+  render();
+}
+function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+function promptAndAnswer(card, dir){
+  return dir === 'reverse' ? { prompt: card.answer, reveal: card.question } : { prompt: card.question, reveal: card.answer };
+}
+
+function renderStudy(){
+  const s = state.studySession;
+  if(!s) return `<div class="screen empty-state"><div class="big-emoji">📚</div>No active session.</div>`;
+  if(s.index >= s.ids.length){
+    const known = s.results.filter(r=>r!=='hard').length;
+    return `<div class="screen">
+      <div class="exam-result">
+        <div class="big-emoji">🎉</div>
+        <div class="exam-score">${known}/${s.results.length}</div>
+        <div class="sub">cards marked as known</div>
+        <button class="btn btn-primary" style="margin-top:20px;" data-action="go-home">Back to dashboard</button>
+      </div>
+    </div>`;
+  }
+  const card = state.cards.find(c=>c.id===s.ids[s.index]);
+  const subj = state.subjects.find(sj=>sj.id===card.subject);
+  const dir = (s.cardDirection && s.cardDirection[card.id]) || 'forward';
+  const pa = promptAndAnswer(card, dir);
+  const progressSegs = s.ids.map((_,i)=>`<div class="seg ${i<s.index?'done':''}"></div>`).join('');
   </div>`;
 }
 
@@ -453,6 +789,7 @@ function renderBrowse(){
   const f = state.browseFilter;
   let cards = [...state.cards];
   if(f.subject) cards = cards.filter(c=>c.subject===f.subject);
+  if(f.topic) cards = cards.filter(c=>c.topic===f.topic);
   if(f.tag) cards = cards.filter(c=>(c.tags||[]).includes(f.tag));
   if(f.query) cards = cards.filter(c=> (c.question+c.answer).toLowerCase().includes(f.query.toLowerCase()));
   if(f.sort==='recent') cards.sort((a,b)=>b.createdAt-a.createdAt);
@@ -460,8 +797,16 @@ function renderBrowse(){
   if(f.sort==='subject') cards.sort((a,b)=>(a.subject||'').localeCompare(b.subject||''));
   if(f.sort==='reviewed') cards.sort((a,b)=>(b.reviewCount||0)-(a.reviewCount||0));
 
+  const activeSubj = state.subjects.find(s=>s.id===f.subject);
+  const topics = (activeSubj && activeSubj.topics) || [];
+
   return `
-  <div class="topbar"><div class="brand">Browse</div></div>
+  <div class="topbar"><div class="brand">Browse</div>
+    <div style="display:flex; gap:6px;">
+      <button class="icon-btn" data-action="quick-add-here" title="Add card here">➕</button>
+      <button class="icon-btn" data-action="export-scope" title="Export this list">📤</button>
+    </div>
+  </div>
   <div class="screen" style="padding-top:0;">
     <div class="search-bar">
       <input type="text" placeholder="Search cards..." value="${escapeAttr(f.query)}" oninput="onSearchInput(this.value)">
@@ -470,6 +815,10 @@ function renderBrowse(){
       <div class="chip ${!f.subject?'selected':''}" data-action="filter-subject" data-val="">All</div>
       ${state.subjects.map(s=>`<div class="chip ${f.subject===s.id?'selected':''}" data-action="filter-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)}</div>`).join('')}
     </div>
+    ${topics.length>0 ? `<div class="filter-bar">
+      <div class="chip ${!f.topic?'selected':''}" data-action="filter-topic" data-val="">All topics</div>
+      ${topics.map(t=>`<div class="chip ${f.topic===t.id?'selected':''}" data-action="filter-topic" data-val="${t.id}">${escapeHtml(t.name)}</div>`).join('')}
+    </div>` : ''}
     <div class="filter-bar">
       <div class="chip ${!f.tag?'selected':''}" data-action="filter-tag" data-val="">All tags</div>
       ${allTags().map(t=>`<div class="chip ${f.tag===t?'selected':''}" data-action="filter-tag" data-val="${t}">${escapeHtml(t)}</div>`).join('')}
@@ -493,15 +842,18 @@ function allTags(){
 
 function renderListCard(c){
   const subj = state.subjects.find(s=>s.id===c.subject);
-  return `<div class="list-card" data-action="edit-card" data-val="${c.id}">
+  const topic = subj && (subj.topics||[]).find(t=>t.id===c.topic);
+  return `<div class="list-card" data-action="edit-card" data-val="${c.id}" ${c.color?`style="border-left:4px solid ${c.color};"`:''}>
     <div class="list-card-top">
       <div style="flex:1;">
-        <div class="list-q">${escapeHtml(c.question)}</div>
+        <div class="list-q">${escapeHtml(c.question)}${isStale(c) ? `<span class="stale-badge">🕓 stale</span>` : ''}</div>
         <div class="list-a">${escapeHtml(c.answer)}</div>
         <div>
           ${subj ? `<span class="tag-mini" style="color:${subj.color}">${subj.icon} ${escapeHtml(subj.name)}</span>` : ''}
+          ${topic ? `<span class="tag-mini">📁 ${escapeHtml(topic.name)}</span>` : ''}
           ${(c.tags||[]).map(t=>`<span class="tag-mini">${escapeHtml(t)}</span>`).join('')}
           ${c.priority ? `<span class="tag-mini" style="color:var(--gold)">⭐ Priority</span>` : ''}
+          ${c.revision ? `<span class="tag-mini" style="color:var(--accent)">🔁 Revision</span>` : ''}
         </div>
       </div>
       <button class="icon-btn" data-action="delete-card" data-val="${c.id}" onclick="event.stopPropagation()">🗑️</button>
@@ -510,14 +862,22 @@ function renderListCard(c){
 }
 
 /* ---------------- Study mode ---------------- */
-function startStudySession(cardIds){
+function startStudySession(cardIds, direction){
   if(cardIds.length===0){ return; }
-  state.studySession = { ids: shuffle([...cardIds]), index:0, flipped:false, results:[] };
+  const dir = direction || state.settings.direction || 'forward';
+  const ids = shuffle([...cardIds]);
+  const cardDirection = {};
+  ids.forEach(id=>{ cardDirection[id] = dir==='mixed' ? (Math.random()<0.5?'forward':'reverse') : dir; });
+  state.studySession = { ids, index:0, flipped:false, results:[], cardDirection };
   state.view = 'study';
   render();
 }
 function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
-  function renderStudy(){
+function promptAndAnswer(card, dir){
+  return dir === 'reverse' ? { prompt: card.answer, reveal: card.question } : { prompt: card.question, reveal: card.answer };
+}
+
+function renderStudy(){
   const s = state.studySession;
   if(!s) return `<div class="screen empty-state"><div class="big-emoji">📚</div>No active session.</div>`;
   if(s.index >= s.ids.length){
@@ -533,21 +893,25 @@ function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.
   }
   const card = state.cards.find(c=>c.id===s.ids[s.index]);
   const subj = state.subjects.find(sj=>sj.id===card.subject);
+  const dir = (s.cardDirection && s.cardDirection[card.id]) || 'forward';
+  const pa = promptAndAnswer(card, dir);
   const progressSegs = s.ids.map((_,i)=>`<div class="seg ${i<s.index?'done':''}"></div>`).join('');
-
   return `
-  <div class="topbar"><button class="icon-btn" data-action="exit-study">✕</button><div class="brand" style="font-size:16px;">Study</div><div style="width:38px"></div></div>
+  <div class="topbar"><button class="icon-btn" data-action="exit-study">✕</button><div class="brand" style="font-size:16px;">Study</div>${lastAction ? `<button class="icon-btn" data-action="undo-swipe" title="Undo">↩️</button>` : `<div style="width:38px"></div>`}</div>
   <div class="screen" style="padding-top:0;">
     <div class="study-progress">${progressSegs}</div>
     <div class="study-wrap">
-      <div class="swipe-card" id="swipeCard" data-flipped="${s.flipped}">
+      <div class="swipe-card" id="swipeCard" data-flipped="${s.flipped}" style="border-color:${card.color||'var(--border)'}">
         ${subj ? `<span class="badge" style="background:${subj.color}22; color:${subj.color}">${subj.icon} ${escapeHtml(subj.name)}</span>` : ''}
         ${card.hint ? `<button class="icon-btn hint-btn" data-action="show-hint" title="Hint">💡</button>` : ''}
         <div class="stamp know" id="stampKnow">KNOW IT</div>
         <div class="stamp practice" id="stampPractice">PRACTICE</div>
+        <div class="stamp priority-up" id="stampPriorityUp">${card.priority?'UNPRIORITIZE':'PRIORITY'}</div>
+        <div class="stamp revision-down" id="stampRevisionDown">${card.revision?'UNMARK':'REVISION'}</div>
         ${card.image ? `<img class="card-img" src="${card.image}">` : ''}
-        ${!s.flipped ? `<div class="qtext">${escapeHtml(card.question)}</div><div class="tap-hint">Tap card to flip · swipe right = know it · left = practice</div>`
-          : `<div class="atext">${escapeHtml(card.answer)}</div>`}
+        ${!s.flipped ? `<div class="qtext">${escapeHtml(pa.prompt)}</div><div class="tap-hint">Tap to flip · swipe ↔ to rate · swipe ↕ for priority/revision</div>`
+          : `<div class="atext">${escapeHtml(pa.reveal)}</div>`}
+        ${(card.priority||card.revision) ? `<div style="position:absolute; bottom:10px; left:0; right:0; text-align:center; font-size:11px; color:var(--text-dim);">${card.priority?'⭐ Priority ':''}${card.revision?'🔁 Revision':''}</div>` : ''}
       </div>
       ${s.flipped ? `<div class="rating-row">
           <button class="rating-btn rating-hard" data-action="rate" data-val="hard">Hard</button>
@@ -561,39 +925,77 @@ function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.
 /* Single shared drag-state object + ONE set of window-level listeners bound once
    for the lifetime of the app. attachSwipeHandlers() just re-points drag.el on
    every render instead of re-registering window listeners (avoids a listener
-   leak that would make swiping feel laggier the longer a study session runs). */
-const drag = { active:false, el:null, startX:0, startY:0, dx:0, moved:false };
+   leak that would make swiping feel laggier the longer a study session runs).
+   Horizontal swipe = rate the card (existing). Vertical swipe = toggle
+   Priority (up) / Revision (down) and snaps back to the same card — it's a
+   tag, not a rating, so the session doesn't advance. */
+const drag = { active:false, el:null, startX:0, startY:0, dx:0, dy:0, axis:null, moved:false };
 
 function dragMove(x,y){
   if(!drag.active || !drag.el) return;
   drag.dx = x - drag.startX;
-  const dy = y - drag.startY;
-  if(Math.abs(dy) > Math.abs(drag.dx)*1.5) return;
+  drag.dy = y - drag.startY;
+  if(!drag.axis && (Math.abs(drag.dx) > 8 || Math.abs(drag.dy) > 8)){
+    drag.axis = Math.abs(drag.dx) > Math.abs(drag.dy) ? 'x' : 'y';
+  }
+  if(!drag.axis) return;
   drag.moved = true;
   const know = document.getElementById('stampKnow');
   const practice = document.getElementById('stampPractice');
-  drag.el.style.transform = `translateX(${drag.dx}px) rotate(${drag.dx/20}deg)`;
-  if(know) know.style.opacity = Math.max(0, drag.dx/80);
-  if(practice) practice.style.opacity = Math.max(0, -drag.dx/80);
+  const priorityStamp = document.getElementById('stampPriorityUp');
+  const revisionStamp = document.getElementById('stampRevisionDown');
+  if(drag.axis === 'x'){
+    drag.el.style.transform = `translateX(${drag.dx}px) rotate(${drag.dx/20}deg)`;
+    if(know) know.style.opacity = Math.max(0, drag.dx/80);
+    if(practice) practice.style.opacity = Math.max(0, -drag.dx/80);
+  } else {
+    drag.el.style.transform = `translateY(${drag.dy}px)`;
+    if(priorityStamp) priorityStamp.style.opacity = Math.max(0, -drag.dy/80);
+    if(revisionStamp) revisionStamp.style.opacity = Math.max(0, drag.dy/80);
+  }
 }
 function dragEnd(){
   if(!drag.active || !drag.el) return;
   drag.active = false;
   const el = drag.el;
   el.style.transition = 'transform .25s ease';
-  if(drag.dx > 90){
-    el.style.transform = `translateX(600px) rotate(20deg)`;
-    setTimeout(()=>quickRate('easy'), 180);
-  } else if(drag.dx < -90){
-    el.style.transform = `translateX(-600px) rotate(-20deg)`;
-    setTimeout(()=>quickRate('hard'), 180);
-  } else {
-    el.style.transform = 'translateX(0) rotate(0)';
-    const know = document.getElementById('stampKnow');
-    const practice = document.getElementById('stampPractice');
-    if(know) know.style.opacity=0; if(practice) practice.style.opacity=0;
+  if(drag.axis === 'x'){
+    if(drag.dx > 90){
+      el.style.transform = `translateX(600px) rotate(20deg)`;
+      setTimeout(()=>quickRate('easy'), 180);
+    } else if(drag.dx < -90){
+      el.style.transform = `translateX(-600px) rotate(-20deg)`;
+      setTimeout(()=>quickRate('hard'), 180);
+    } else {
+      el.style.transform = 'translateX(0) rotate(0)';
+    }
+  } else if(drag.axis === 'y'){
+    if(drag.dy < -70){
+      el.style.transform = 'translateY(0)';
+      toggleCurrentCardFlag('priority');
+    } else if(drag.dy > 70){
+      el.style.transform = 'translateY(0)';
+      toggleCurrentCardFlag('revision');
+    } else {
+      el.style.transform = 'translateY(0)';
+    }
   }
-  drag.dx = 0;
+  const know = document.getElementById('stampKnow');
+  const practice = document.getElementById('stampPractice');
+  const priorityStamp = document.getElementById('stampPriorityUp');
+  const revisionStamp = document.getElementById('stampRevisionDown');
+  if(know) know.style.opacity=0; if(practice) practice.style.opacity=0;
+  if(priorityStamp) priorityStamp.style.opacity=0; if(revisionStamp) revisionStamp.style.opacity=0;
+  drag.dx = 0; drag.dy = 0; drag.axis = null;
+}
+function toggleCurrentCardFlag(flagKey){
+  const s = state.studySession; if(!s) return;
+  const card = state.cards.find(c=>c.id===s.ids[s.index]);
+  if(!card) return;
+  card[flagKey] = !card[flagKey];
+  if(flagKey==='revision' && card.revision) card.revisionStreak = 0;
+  persistAll();
+  render();
 }
 // Bound exactly once, ever.
 window.addEventListener('mousemove', e=> dragMove(e.clientX, e.clientY));
@@ -602,15 +1004,15 @@ window.addEventListener('mouseup', dragEnd);
 function attachSwipeHandlers(){
   const el = document.getElementById('swipeCard');
   if(!el) return;
-  drag.el = el; drag.active = false; drag.dx = 0; drag.moved = false;
+  drag.el = el; drag.active = false; drag.dx = 0; drag.dy = 0; drag.axis = null; drag.moved = false;
 
-  el.addEventListener('touchstart', e=>{ drag.active=true; drag.moved=false; drag.startX=e.touches[0].clientX; drag.startY=e.touches[0].clientY; el.style.transition='none'; }, {passive:true});
+  el.addEventListener('touchstart', e=>{ drag.active=true; drag.moved=false; drag.axis=null; drag.startX=e.touches[0].clientX; drag.startY=e.touches[0].clientY; el.style.transition='none'; }, {passive:true});
   el.addEventListener('touchmove', e=>{
     dragMove(e.touches[0].clientX, e.touches[0].clientY);
-    if(Math.abs(drag.dx) > 10) e.preventDefault();
+    if(Math.abs(drag.dx) > 10 || Math.abs(drag.dy) > 10) e.preventDefault();
   }, {passive:false});
   el.addEventListener('touchend', dragEnd);
-  el.addEventListener('mousedown', e=>{ drag.active=true; drag.moved=false; drag.startX=e.clientX; drag.startY=e.clientY; el.style.transition='none'; });
+  el.addEventListener('mousedown', e=>{ drag.active=true; drag.moved=false; drag.axis=null; drag.startX=e.clientX; drag.startY=e.clientY; el.style.transition='none'; });
   el.addEventListener('click', ()=>{
     if(drag.moved) return;
     flipCard();
@@ -640,14 +1042,21 @@ function renderExamSetup(){
     <div class="card">
       <label class="field-label">Subject / Folder</label>
       <select id="examSubject">
-        <option value="">All subjects</option>
+      <option value="">All subjects</option>
         ${state.subjects.map(s=>`<option value="${s.id}">${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
       </select>
       <label class="field-label">Number of questions</label>
       <input type="number" id="examCount" value="10" min="3" max="100">
       <label class="field-label">Seconds per question</label>
       <input type="number" id="examTimer" value="20" min="5" max="120">
+      <label class="field-label">Direction</label>
+      <select id="examDirection">
+        <option value="forward" ${state.settings.direction==='forward'?'selected':''}>Term → Definition</option>
+        <option value="reverse" ${state.settings.direction==='reverse'?'selected':''}>Definition → Term</option>
+        <option value="mixed" ${state.settings.direction==='mixed'?'selected':''}>Mixed</option>
+      </select>
       <label class="field-label"><input type="checkbox" id="examPriorityOnly" style="width:auto; margin-right:8px;">Priority cards only</label>
+      <label class="field-label"><input type="checkbox" id="examCramMode" style="width:auto; margin-right:8px;">Cram mode (Hard + Priority only)</label>
       <button class="btn btn-primary btn-block" data-action="begin-exam">Start exam</button>
     </div>
   </div>`;
@@ -657,14 +1066,16 @@ function renderExamSession(){
   const s = state.examSession;
   if(!s) return renderExamSetup();
   const card = s.cards[s.index];
+  const dir = (s.cardDirection && s.cardDirection[card.id]) || 'forward';
+  const pa = promptAndAnswer(card, dir);
   return `
   <div class="topbar"><button class="icon-btn" data-action="exit-exam">✕</button><div class="timer-badge" id="examTimerBadge">${s.timeLeft}s</div><div class="brand" style="font-size:14px;">${s.index+1}/${s.cards.length}</div></div>
   <div class="screen" style="padding-top:0;">
     <div class="study-progress">${s.cards.map((_,i)=>`<div class="seg ${i<s.index?'done':''}"></div>`).join('')}</div>
     <div class="swipe-card" style="cursor:default;">
       ${card.image ? `<img class="card-img" src="${card.image}">` : ''}
-      ${!s.revealed ? `<div class="qtext">${escapeHtml(card.question)}</div>`
-        : `<div class="atext">${escapeHtml(card.answer)}</div>`}
+      ${!s.revealed ? `<div class="qtext">${escapeHtml(pa.prompt)}</div>`
+        : `<div class="atext">${escapeHtml(pa.reveal)}</div>`}
     </div>
     ${!s.revealed
       ? `<button class="btn btn-primary btn-block" style="margin-top:16px;" data-action="reveal-exam">Show answer</button>`
@@ -694,10 +1105,15 @@ function beginExam(){
   const count = parseInt(document.getElementById('examCount').value)||10;
   const perQ = parseInt(document.getElementById('examTimer').value)||20;
   const priorityOnly = document.getElementById('examPriorityOnly').checked;
+  const cramMode = document.getElementById('examCramMode').checked;
+  const direction = document.getElementById('examDirection').value;
   let pool = state.cards.filter(c=> (!subjectId || c.subject===subjectId) && (!priorityOnly || c.priority));
+  if(cramMode) pool = pool.filter(c=> c.priority || c.difficulty==='hard');
   pool = shuffle([...pool]).slice(0, count);
   if(pool.length===0){ alert('No cards match those filters yet.'); return; }
-  state.examSession = { cards: pool, index:0, revealed:false, score:0, perQ, timeLeft: perQ };
+  const cardDirection = {};
+  pool.forEach(c=>{ cardDirection[c.id] = direction==='mixed' ? (Math.random()<0.5?'forward':'reverse') : direction; });
+  state.examSession = { cards: pool, index:0, revealed:false, score:0, perQ, timeLeft: perQ, cardDirection };
   state.view = 'examSession';
   render();
   startExamTimer();
@@ -726,14 +1142,35 @@ function nextExamQuestion(){
 /* ---------------- Bottom nav ---------------- */
 function renderBottomNav(){
   const tab = (name,icon,label)=>`<button class="navbtn ${state.view===name?'active':''}" data-action="nav" data-val="${name}"><span class="navicon">${icon}</span>${label}</button>`;
-  return `<div class="bottomnav">
+  return `<div class="bottomnav bottomnav-5">
     ${tab('home','🏠','Home')}
     ${tab('browse','🗂️','Browse')}
     <div class="fab" data-action="open-add">+</div>
-    <div style="flex:1"></div>
+    ${tab('revision','🔁','Revision')}
+    ${tab('priority','⭐','Priority')}
     ${tab('exam','⏱️','Exam')}
   </div>`;
 }
+
+/* ---------------- Revision / Priority scoped views ---------------- */
+function renderScopedFlagView(flagKey, title, emptyMsg){
+  const f = state.browseFilter;
+  const subjOptions = state.subjects.map(s=>`<div class="chip ${f.subject===s.id?'selected':''}" data-action="filter-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)}</div>`).join('');
+  let cards = state.cards.filter(c=>c[flagKey]);
+  if(f.subject) cards = cards.filter(c=>c.subject===f.subject);
+  return `
+  <div class="topbar"><div class="brand">${title}</div></div>
+  <div class="screen" style="padding-top:0;">
+    <div class="filter-bar">
+      <div class="chip ${!f.subject?'selected':''}" data-action="filter-subject" data-val="">All subjects</div>
+      ${subjOptions}
+    </div>
+    ${cards.length>0 ? `<button class="btn btn-primary btn-block" style="margin-bottom:14px;" data-action="study-scope" data-val="${flagKey}">Study these ${cards.length} card${cards.length>1?'s':''}</button>` : ''}
+    ${cards.length===0 ? `<div class="empty-state"><div class="big-emoji">✨</div>${emptyMsg}</div>` : cards.map(c=>renderListCard(c)).join('')}
+  </div>`;
+}
+function renderRevision(){ return renderScopedFlagView('revision', '🔁 Revision', 'Nothing needs revision right now.'); }
+function renderPriority(){ return renderScopedFlagView('priority', '⭐ Priority', 'No priority cards yet.'); }
 
 /* ---------------- Modals: Add/Edit card, Import, Settings ---------------- */
 let modalState = null; // 'add' | 'import' | 'settings' | null
@@ -745,15 +1182,73 @@ function renderModal(){
   const div = document.createElement('div');
   div.id = 'modalRoot';
   div.className = 'modal-overlay';
-  div.innerHTML = modalState==='add' ? addEditModalHtml() : modalState==='import' ? importModalHtml() : settingsModalHtml();
+  const builders = {
+    add: addEditModalHtml, import: importModalHtml, settings: settingsModalHtml,
+    startPicker: startPickerModalHtml, manageSubjects: manageSubjectsModalHtml, manageTopics: manageTopicsModalHtml
+  };
+  div.innerHTML = (builders[modalState] || settingsModalHtml)();
   div.addEventListener('click', (e)=>{ if(e.target===div){ modalState=null; state.editingCard=null; render(); } });
   document.body.appendChild(div);
   attachModalHandlers();
 }
+  function startPickerModalHtml(){
+  const cramCount = state.cards.filter(c=>c.priority || c.difficulty==='hard').length;
+  return `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">What do you want to study?</div>
+    <button class="btn btn-primary btn-block" style="margin-bottom:10px;" data-action="start-scope-all">All due cards (${dueCards(state.cards).length})</button>
+    <button class="btn btn-outline btn-block" style="margin-bottom:10px;" data-action="start-cram">🔥 Cram mode — Hard + Priority (${cramCount})</button>
+    ${state.subjects.map(s=>{
+      const count = dueCards(state.cards.filter(c=>c.subject===s.id)).length;
+      return `<button class="btn btn-ghost btn-block" style="margin-bottom:8px; text-align:left;" data-action="start-scope-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)} (${count} due)</button>`;
+    }).join('')}
+  </div>`;
+}
+
+function manageSubjectsModalHtml(){
+  return `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Manage subjects (${state.subjects.length}/${MAX_SUBJECTS})</div>
+    ${state.subjects.map(s=>`<div class="list-card">
+      <div class="row-between">
+        <div class="subject-name"><span class="dot" style="background:${s.color}"></span>${s.icon} ${escapeHtml(s.name)}</div>
+        <div style="display:flex; gap:6px;">
+          <button class="icon-btn" data-action="manage-topics" data-val="${s.id}">📁</button>
+          <button class="icon-btn" data-action="rename-subject" data-val="${s.id}">✏️</button>
+          <button class="icon-btn" data-action="delete-subject" data-val="${s.id}">🗑️</button>
+        </div>
+      </div>
+    </div>`).join('')}
+    ${state.subjects.length < MAX_SUBJECTS ? `<button class="btn btn-primary btn-block" data-action="add-subject">+ Add subject</button>` : `<div class="sub">Maximum of ${MAX_SUBJECTS} subjects reached.</div>`}
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" data-action="close-modal">Done</button>
+  </div>`;
+}
+
+function manageTopicsModalHtml(){
+  const s = state.subjects.find(x=>x.id===window._manageTopicsSubject);
+  if(!s) return `<div class="modal-sheet"><div class="sheet-handle"></div><div class="sheet-title">Subject not found</div></div>`;
+  const topics = s.topics || [];
+  return `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${s.icon} ${escapeHtml(s.name)} — Topics (${topics.length}/${MAX_TOPICS_PER_SUBJECT})</div>
+    ${topics.map(t=>`<div class="list-card">
+      <div class="row-between">
+        <span>${escapeHtml(t.name)}</span>
+        <div style="display:flex; gap:6px;">
+          <button class="icon-btn" data-action="rename-topic" data-val="${t.id}">✏️</button>
+          <button class="icon-btn" data-action="delete-topic" data-val="${t.id}">🗑️</button>
+        </div>
+      </div>
+    </div>`).join('')}
+    ${topics.length < MAX_TOPICS_PER_SUBJECT ? `<button class="btn btn-primary btn-block" data-action="add-topic">+ Add topic</button>` : `<div class="sub">Maximum of ${MAX_TOPICS_PER_SUBJECT} topics reached.</div>`}
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" data-action="close-modal">Back</button>
+  </div>`;
+}
 
 function addEditModalHtml(){
   const editing = state.editingCard;
-  const c = editing || { question:'', answer:'', hint:'', subject: (state.subjects[0] ? state.subjects[0].id : undefined), tags:[], image:null, priority:false };
+  const defaultSubject = window._quickAddSubject || (state.subjects[0] ? state.subjects[0].id : undefined);
+  const c = editing || { question:'', answer:'', hint:'', subject: defaultSubject, topic: window._quickAddTopic||null, tags:[], image:null, priority:false, revision:false, color:null };
   const [activeTab] = [window._addTab || 'manual'];
   return `<div class="modal-sheet">
     <div class="sheet-handle"></div>
@@ -769,6 +1264,8 @@ function addEditModalHtml(){
 }
 
 function manualFormHtml(c, editing){
+  const subj = state.subjects.find(s=>s.id===c.subject);
+  const topics = (subj && subj.topics) || [];
   return `
     <label class="field-label">Question</label>
     <textarea id="fQuestion" placeholder="e.g. What is the powerhouse of the cell?">${escapeHtml(c.question)}</textarea>
@@ -780,28 +1277,63 @@ function manualFormHtml(c, editing){
     <input type="file" id="fImage" accept="image/*">
     ${c.image ? `<img src="${c.image}" style="max-width:100%; max-height:100px; border-radius:10px; margin-bottom:10px;">` : ''}
     <label class="field-label">Subject</label>
-    <select id="fSubject">
+    <select id="fSubject" onchange="onFormSubjectChange(this.value)">
       ${state.subjects.map(s=>`<option value="${s.id}" ${c.subject===s.id?'selected':''}>${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
     </select>
+    ${topics.length>0 ? `<label class="field-label">Topic (optional)</label>
+    <select id="fTopic">
+      <option value="">No topic</option>
+      ${topics.map(t=>`<option value="${t.id}" ${c.topic===t.id?'selected':''}>${escapeHtml(t.name)}</option>`).join('')}
+    </select>` : `<input type="hidden" id="fTopic" value="">`}
+    <label class="field-label">Card color (optional)</label>
+    <div class="chip-row" id="fColorRow">
+      <div class="color-swatch ${!c.color?'selected':''}" data-color="" style="background:var(--surface-2); border:1px solid var(--border);"></div>
+      ${CARD_COLORS.map(col=>`<div class="color-swatch ${c.color===col?'selected':''}" data-color="${col}" style="background:${col}"></div>`).join('')}
+    </div>
     <label class="field-label">Tags</label>
     <div class="chip-row" id="fTags">
       ${allTags().map(t=>`<div class="chip ${((c.tags)||[]).includes(t)?'selected':''}" data-tag="${escapeAttr(t)}">${escapeHtml(t)}</div>`).join('')}
     </div>
     <label class="field-label"><input type="checkbox" id="fPriority" ${c.priority?'checked':''} style="width:auto; margin-right:8px;">Mark as high priority</label>
+    <label class="field-label"><input type="checkbox" id="fRevision" ${c.revision?'checked':''} style="width:auto; margin-right:8px;">Mark as needs revision</label>
     <button class="btn btn-primary btn-block" data-action="${editing?'save-edit':'save-new'}" data-val="${editing?editing.id:''}">${editing?'Save changes':'Add card'}</button>
     ${editing ? `<button class="btn btn-ghost btn-block" style="margin-top:8px;" data-action="close-modal">Cancel</button>` : ''}
   `;
 }
+function onFormSubjectChange(subjectId){
+  window._quickAddSubject = subjectId;
+  window._quickAddTopic = null;
+  render();
+}
 
 function importFormHtml(){
+  const pastPaper = !!window._pastPaperMode;
+  const subj = state.subjects.find(s=>s.id===(window._quickAddSubject || state.subjects[0].id));
+  const topics = (subj && subj.topics) || [];
   return `
+    <div class="tabbar-inline">
+      <button class="${!pastPaper?'active':''}" data-action="past-paper-toggle">Paste Q&A</button>
+      <button class="${pastPaper?'active':''}" data-action="past-paper-toggle">Past paper (Q + memo)</button>
+    </div>
+    ${!pastPaper ? `
     <label class="field-label">Paste your Q&A text</label>
     <textarea id="fImportText" placeholder="Paste up to 100+ pairs. Works with:&#10;Q: ...  A: ...&#10;— or —&#10;question [TAB] answer per line&#10;— or —&#10;question&#10;answer&#10;(blank line between cards)" style="min-height:160px;"></textarea>
+    ` : `
+    <label class="field-label">Paste the question paper</label>
+    <textarea id="fPastPaperQ" placeholder="1. What is Newton's second law?&#10;2. Define momentum." style="min-height:120px;"></textarea>
+    <label class="field-label">Paste the memo (optional — unanswered questions still get added)</label>
+    <textarea id="fPastPaperA" placeholder="1. F = ma&#10;2. Mass times velocity" style="min-height:120px;"></textarea>
+    `}
     <label class="field-label">Assign to subject</label>
-    <select id="fImportSubject">
-      ${state.subjects.map(s=>`<option value="${s.id}">${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
+    <select id="fImportSubject" onchange="onFormSubjectChange(this.value)">
+      ${state.subjects.map(s=>`<option value="${s.id}" ${(window._quickAddSubject===s.id)?'selected':''}>${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
     </select>
-    <button class="btn btn-primary btn-block" data-action="preview-import">Preview cards</button>
+    ${topics.length>0 ? `<label class="field-label">Topic (optional)</label>
+    <select id="fImportTopic">
+      <option value="">No topic</option>
+      ${topics.map(t=>`<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}
+    </select>` : `<input type="hidden" id="fImportTopic" value="">`}
+    <button class="btn btn-primary btn-block" data-action="${pastPaper?'preview-past-paper':'preview-import'}">Preview cards</button>
     <div id="importPreview"></div>
   `;
 }
@@ -815,14 +1347,29 @@ function settingsModalHtml(){
     <div class="sheet-title">Settings</div>
     <label class="field-label">Your name</label>
     <input type="text" id="setName" value="${escapeAttr(s.name)}">
-    <label class="field-label">Daily goal (cards)</label>
-    <input type="number" id="setGoal" value="${s.dailyGoal}" min="5" max="200">
+    <label class="field-label">Default study direction</label>
+    <select id="setDirection">
+      <option value="forward" ${s.direction==='forward'?'selected':''}>Term → Definition</option>
+      <option value="reverse" ${s.direction==='reverse'?'selected':''}>Definition → Term</option>
+      <option value="mixed" ${s.direction==='mixed'?'selected':''}>Mixed</option>
+    </select>
     <label class="field-label">Theme</label>
     <div class="chip-row">
       <div class="chip ${s.theme==='dark'?'selected':''}" data-action="set-theme" data-val="dark">🌙 Dark</div>
       <div class="chip ${s.theme==='light'?'selected':''}" data-action="set-theme" data-val="light">☀️ Light</div>
     </div>
-    <button class="btn btn-primary btn-block" data-action="save-settings">Save</button>
+
+    <h2 class="section-title">Weekly goals per subject</h2>
+    ${state.subjects.map(sub=>`<div class="row-between" style="margin-bottom:8px;">
+      <span class="sub" style="margin:0;">${sub.icon} ${escapeHtml(sub.name)}</span>
+      <input type="number" class="weekly-goal-input" data-subject="${sub.id}" value="${state.settings.weeklyGoals[sub.id]||0}" min="0" max="500" style="width:80px; margin-bottom:0;">
+    </div>`).join('')}
+
+    <button class="btn btn-primary btn-block" style="margin-top:6px;" data-action="save-settings">Save</button>
+
+    <h2 class="section-title">Subjects & topics</h2>
+    <button class="btn btn-outline btn-block" data-action="manage-subjects">Manage subjects (${state.subjects.length}/${MAX_SUBJECTS})</button>
+
     <h2 class="section-title">Data</h2>
     <button class="btn btn-outline btn-block" data-action="export-data">Export all data (backup)</button>
   </div>`;
@@ -840,6 +1387,12 @@ function attachModalHandlers(){
   });
   document.querySelectorAll('#fTags .chip').forEach(el=>{
     el.addEventListener('click', ()=> el.classList.toggle('selected'));
+  });
+  document.querySelectorAll('#fColorRow .color-swatch').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      document.querySelectorAll('#fColorRow .color-swatch').forEach(x=>x.classList.remove('selected'));
+      el.classList.add('selected');
+    });
   });
 }
 
@@ -866,12 +1419,90 @@ function handleAction(e){
   if(action==='confirm-import'){ confirmImport(); return; }
 
   if(action==='filter-subject'){ state.browseFilter.subject = val||null; render(); return; }
+  if(action==='filter-topic'){ state.browseFilter.topic = val||null; render(); return; }
   if(action==='filter-tag'){ state.browseFilter.tag = val||null; render(); return; }
 
+  if(action==='study-scope'){
+    const flagKey = val;
+    startStudySession(state.cards.filter(c=>c[flagKey] && (!state.browseFilter.subject || c.subject===state.browseFilter.subject)).map(c=>c.id));
+    return;
+  }
   if(action==='start-due-study'){ startStudySession(dueCards(state.cards).map(c=>c.id)); return; }
+  if(action==='open-start-picker'){ modalState='startPicker'; render(); return; }
+  if(action==='start-scope-all'){ modalState=null; startStudySession(dueCards(state.cards).map(c=>c.id)); return; }
+  if(action==='start-scope-subject'){
+    modalState=null;
+    startStudySession(dueCards(state.cards.filter(c=>c.subject===val)).map(c=>c.id));
+    return;
+  }
+  if(action==='start-cram'){
+    modalState=null;
+    startStudySession(state.cards.filter(c=>c.priority || c.difficulty==='hard').map(c=>c.id));
+    return;
+  }
   if(action==='exit-study'){ state.view='home'; state.studySession=null; render(); return; }
   if(action==='show-hint'){ const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]); if(card.hint) alert('Hint: '+card.hint); return; }
   if(action==='rate'){ const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]); rateCard(card,val); s.results.push(val); s.index+=1; s.flipped=false; persistAll(); render(); return; }
+  if(action==='undo-swipe'){ undoLastAction(); const s=state.studySession; if(s && s.index>0){ s.index-=1; s.results.pop(); } render(); return; }
+  if(action==='toggle-priority'){ const c=state.cards.find(x=>x.id===val); if(c){ c.priority=!c.priority; persistAll(); } render(); return; }
+  if(action==='toggle-revision'){ const c=state.cards.find(x=>x.id===val); if(c){ c.revision=!c.revision; if(c.revision) c.revisionStreak=0; persistAll(); } render(); return; }
+
+  if(action==='export-scope'){
+    let cards = [...state.cards];
+    const f = state.browseFilter;
+    if(f.subject) cards = cards.filter(c=>c.subject===f.subject);
+    if(f.topic) cards = cards.filter(c=>c.topic===f.topic);
+    const subj = state.subjects.find(s=>s.id===f.subject);
+    exportCardsAsText(cards, subj ? subj.name.replace(/\s+/g,'-') : 'recall-export');
+    return;
+  }
+  if(action==='quick-add-here'){
+    modalState='add'; window._addTab='manual'; state.editingCard=null;
+    window._quickAddSubject = state.browseFilter.subject || (state.subjects[0] && state.subjects[0].id);
+    window._quickAddTopic = state.browseFilter.topic || null;
+    render();
+    return;
+  }
+
+  if(action==='manage-subjects'){ modalState='manageSubjects'; render(); return; }
+  if(action==='add-subject'){
+    const name = prompt('New subject name:');
+    if(name) addSubject(name);
+    render();
+    return;
+  }
+  if(action==='rename-subject'){
+    const s = state.subjects.find(x=>x.id===val);
+    const name = prompt('Rename subject:', s?s.name:'');
+    if(name) renameSubject(val, name);
+    render();
+    return;
+  }
+  if(action==='delete-subject'){
+    if(confirm('Delete this subject? Its cards will be unassigned, not deleted.')) deleteSubject(val);
+    render();
+    return;
+  }
+  if(action==='manage-topics'){ window._manageTopicsSubject = val; modalState='manageTopics'; render(); return; }
+  if(action==='add-topic'){
+    const name = prompt('New topic name:');
+    if(name) addTopic(window._manageTopicsSubject, name);
+    render();
+    return;
+  }
+  if(action==='rename-topic'){
+    const name = prompt('Rename topic:');
+    if(name) renameTopic(window._manageTopicsSubject, val, name);
+    render();
+    return;
+  }
+  if(action==='delete-topic'){
+    if(confirm('Delete this topic?')) deleteTopic(window._manageTopicsSubject, val);
+    render();
+    return;
+  }
+  if(action==='past-paper-toggle'){ window._pastPaperMode = !window._pastPaperMode; render(); return; }
+  if(action==='preview-past-paper'){ previewPastPaper(); return; }
 
   if(action==='begin-exam'){ beginExam(); return; }
   if(action==='exit-exam'){ clearInterval(examTimerInterval); state.view='home'; state.examSession=null; render(); return; }
@@ -906,14 +1537,20 @@ async function saveNewCard(){
   if(!q || !a){ alert('Please fill in both question and answer.'); return; }
   const hint = document.getElementById('fHint').value.trim();
   const subject = document.getElementById('fSubject').value;
+  const topicEl = document.getElementById('fTopic');
+  const topic = topicEl ? (topicEl.value || null) : null;
   const priority = document.getElementById('fPriority').checked;
+  const revision = document.getElementById('fRevision').checked;
+  const colorEl = document.querySelector('#fColorRow .color-swatch.selected');
+  const color = colorEl ? (colorEl.dataset.color || null) : null;
   const tags = [...document.querySelectorAll('#fTags .chip.selected')].map(c=>c.dataset.tag);
   const image = await readImageInput(document.getElementById('fImage'));
   state.cards.push({
-    id: uid(), question:q, answer:a, hint, subject, tags, priority, image: image||null,
+    id: uid(), question:q, answer:a, hint, subject, topic, tags, priority, revision, revisionStreak:0, color, image: image||null,
     createdAt: Date.now(), reviewCount:0, difficulty:null, srs: initSRS()
   });
   persistAll();
+  window._quickAddSubject = null; window._quickAddTopic = null;
   modalState = null; state.view='browse'; render();
 }
 
@@ -924,7 +1561,13 @@ async function saveEditCard(id){
   c.answer = document.getElementById('fAnswer').value.trim();
   c.hint = document.getElementById('fHint').value.trim();
   c.subject = document.getElementById('fSubject').value;
+  const topicEl = document.getElementById('fTopic');
+  c.topic = topicEl ? (topicEl.value || null) : null;
   c.priority = document.getElementById('fPriority').checked;
+  c.revision = document.getElementById('fRevision').checked;
+  if(!c.revision) c.revisionStreak = 0;
+  const colorEl = document.querySelector('#fColorRow .color-swatch.selected');
+  c.color = colorEl ? (colorEl.dataset.color || null) : null;
   c.tags = [...document.querySelectorAll('#fTags .chip.selected')].map(x=>x.dataset.tag);
   const newImage = await readImageInput(document.getElementById('fImage'));
   if(newImage) c.image = newImage;
@@ -950,9 +1593,11 @@ function previewImport(){
 }
 function confirmImport(){
   const subject = document.getElementById('fImportSubject').value;
+  const topicEl = document.getElementById('fImportTopic');
+  const topic = topicEl ? (topicEl.value || null) : null;
   lastPreviewedCards.forEach(c=>{
     state.cards.push({
-      id: uid(), question:c.question, answer:c.answer, hint:'', subject, tags:[], priority:false, image:null,
+      id: uid(), question:c.question, answer:c.answer, hint:'', subject, topic, tags:[], priority:false, revision:false, revisionStreak:0, color:null, image:null,
       createdAt: Date.now()+Math.random(), reviewCount:0, difficulty:null, srs: initSRS()
     });
   });
@@ -961,9 +1606,32 @@ function confirmImport(){
   modalState = null; state.view='browse'; render();
 }
 
+function previewPastPaper(){
+  const qText = document.getElementById('fPastPaperQ').value;
+  const aText = document.getElementById('fPastPaperA').value;
+  const cards = buildPastPaperCards(qText, aText);
+  lastPreviewedCards = cards;
+  const box = document.getElementById('importPreview');
+  if(cards.length===0){
+    box.innerHTML = `<div class="feedback-banner">Couldn't detect numbered questions. Try "1. ..." or "Q1) ..." style numbering.</div>`;
+    return;
+  }
+  const missingCount = cards.filter(c=>c.needsAnswer).length;
+  box.innerHTML = `<div class="feedback-banner">Found ${cards.length} question${cards.length>1?'s':''} ✅ ${missingCount>0?`(${missingCount} still need answers — you can edit them after import)`:''}</div>
+    ${cards.slice(0,6).map(c=>`<div class="list-card"><div class="list-q">${escapeHtml(c.question)}</div><div class="list-a">${c.answer?escapeHtml(c.answer):'<em>No answer yet</em>'}</div></div>`).join('')}
+    ${cards.length>6 ? `<div class="sub">+ ${cards.length-6} more...</div>` : ''}
+    <button class="btn btn-primary btn-block" style="margin-top:10px;" data-action="confirm-import">Import ${cards.length} card${cards.length>1?'s':''}</button>`;
+  document.querySelector('[data-action="confirm-import"]').addEventListener('click', handleAction);
+}
+
 function saveSettings(){
   state.settings.name = document.getElementById('setName').value.trim() || 'there';
-  state.settings.dailyGoal = parseInt(document.getElementById('setGoal').value)||20;
+  state.settings.direction = document.getElementById('setDirection').value;
+  document.querySelectorAll('.weekly-goal-input').forEach(inp=>{
+    const val = parseInt(inp.value)||0;
+    if(val > 0) state.settings.weeklyGoals[inp.dataset.subject] = val;
+    else delete state.settings.weeklyGoals[inp.dataset.subject];
+  });
   persistAll();
   modalState = null; render();
 }
@@ -972,9 +1640,8 @@ function exportData(){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = 'recall-backup.json'; a.click();
-}
-
-/* ---------------- Utils ---------------- */
+                                      }
+  /* ---------------- Utils ---------------- */
 function escapeHtml(str){
   return String(str===null || str===undefined ? '' : str).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
