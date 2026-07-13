@@ -31,6 +31,28 @@
     --text-dim: #6B6F78;
     --accent-dim: #7C6FFF22;
   }
+  [data-theme="forest"]{
+    --bg: #0D1712;
+    --surface: #16241D;
+    --surface-2: #1D2F26;
+    --border: #2A4136;
+    --text: #E7F3EC;
+    --text-dim: #8FAB9C;
+    --accent: #34D399;
+    --accent-dim: #34D39933;
+    --gold: #FBBF24;
+  }
+  [data-theme="sunset"]{
+    --bg: #1A1210;
+    --surface: #261915;
+    --surface-2: #33221C;
+    --border: #4A3229;
+    --text: #FBEDE7;
+    --text-dim: #C4A199;
+    --accent: #FB923C;
+    --accent-dim: #FB923C33;
+    --gold: #FBBF24;
+  }
   *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html,body{ height:100%; overscroll-behavior-y: none; }
   body{
@@ -161,7 +183,6 @@
   .exam-result{ text-align:center; padding:20px 0; }
   .exam-score{ font-size:52px; font-weight:900; color:var(--accent); }
   .timer-badge{ font-family:var(--font-mono); font-weight:700; font-size:14px; background:var(--surface-2); padding:6px 12px; border-radius:999px; }
-
   ::-webkit-scrollbar{ width:0; height:0; }
   a{ color:var(--accent); }
 </style>
@@ -186,7 +207,12 @@ const DEFAULT_SUBJECTS = [
 ];
 const MAX_SUBJECTS = 30;
 const MAX_TOPICS_PER_SUBJECT = 25;
-const CARD_COLORS = ['#7C6FFF','#4ADE80','#F87171','#FFB74D','#60A5FA','#F472B6','#A78BFA','#34D399'];
+const CARD_COLORS = ['#7C6FFF','#4ADE80','#F87171','#FFB74D','#60A5FA','#F472B6','#A78BFA','#34D399','#FB923C','#22D3EE','#E879F9','#A3E635','#FBBF24','#FB7185','#818CF8','#2DD4BF'];
+function autoAssignColor(subjectId){
+  const subj = state.subjects.find(s=>s.id===subjectId);
+  if(subj && subj.color) return subj.color;
+  return CARD_COLORS[state.cards.length % CARD_COLORS.length];
+}
 
 const DEFAULT_TAGS = ['Hard','Need Revision','Exam Favourite'];
 
@@ -206,7 +232,7 @@ let state = {
   cards: load(STORE_KEYS.cards, []),
   subjects: load(STORE_KEYS.subjects, DEFAULT_SUBJECTS),
   settings: load(STORE_KEYS.settings, { theme:'dark', name:'there', dailyGoal:20, weeklyGoals:{}, direction:'forward' }),
-  stats: load(STORE_KEYS.stats, { streak:0, lastStudyDate:null, xp:0, history:[], freezeAvailable:true, freezeWeekStart:null, reviewLog:[] }),
+  stats: load(STORE_KEYS.stats, { streak:0, lastStudyDate:null, xp:0, history:[], freezeAvailable:true, freezeWeekStart:null, reviewLog:[], studyTimeLog:[] }),
   view: 'home',
   studySession: null,
   examSession: null,
@@ -225,23 +251,77 @@ function persistAll(){
 
 /* Revision reminders: only runs inside the packaged app (Capacitor), where the
    @capacitor/local-notifications plugin is available. In a plain browser preview
-   this silently does nothing — there's no notification API to fall back to. */
+   this silently does nothing — there's no notification API to fall back to.
+   Android requires an explicit permission grant (not just declaring it in the
+   manifest), so we request it before scheduling — without this, schedule()
+   can silently do nothing on modern Android versions. */
+function getLocalNotificationsPlugin(){
+  return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
+}
 function scheduleRevisionReminder(){
   try{
-    const LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
+    const LN = getLocalNotificationsPlugin();
     if(!LN) return;
-    const revisionCount = state.cards.filter(c=>c.revision).length;
-    LN.cancel({ notifications: [{ id: 9001 }] }).catch(()=>{});
-    if(revisionCount === 0) return;
-    LN.schedule({
-      notifications: [{
-        id: 9001,
-        title: 'Recall',
-        body: `You have ${revisionCount} card${revisionCount>1?'s':''} marked for revision — quick review?`,
-        schedule: { on: { hour: 18, minute: 0 }, repeats: true }
-      }]
+    LN.checkPermissions().then(status=>{
+      if(status.display !== 'granted'){
+        // Don't schedule until the user has actually granted permission —
+        // request it once (Settings also has an explicit "Enable" button
+        // for anyone who denied it the first time and wants to retry).
+        LN.requestPermissions().then(res=>{
+          if(res.display === 'granted') doScheduleRevisionReminder(LN);
+        }).catch(()=>{});
+        return;
+      }
+      doScheduleRevisionReminder(LN);
     }).catch(()=>{});
   }catch(e){ /* no-op — never let a notification failure break the app */ }
+}
+function doScheduleRevisionReminder(LN){
+  const revisionCount = state.cards.filter(c=>c.revision).length;
+  LN.cancel({ notifications: [{ id: 9001 }] }).catch(()=>{});
+  if(revisionCount === 0) return;
+  LN.schedule({
+    notifications: [{
+      id: 9001,
+      title: 'Recall',
+      body: `You have ${revisionCount} card${revisionCount>1?'s':''} marked for revision — quick review?`,
+      schedule: { on: { hour: 18, minute: 0 }, repeats: true }
+    }]
+  }).catch(()=>{});
+}
+function requestNotificationPermissionManually(){
+  const LN = getLocalNotificationsPlugin();
+  if(!LN){ alert("Notifications only work in the installed app, not this preview."); return; }
+  LN.requestPermissions().then(res=>{
+    if(res.display === 'granted'){ alert('Notifications enabled.'); scheduleRevisionReminder(); }
+    else alert('Permission was not granted. Check your phone\'s system Settings → Apps → Recall → Notifications.');
+  }).catch(()=> alert('Could not request permission.'));
+}
+
+/* Photo-scan (OCR): reads text off a photo of a question paper or memo using
+   on-device text recognition — works fully offline once installed, no
+   internet needed to scan. This only runs inside the packaged app (the
+   plugins aren't present in a plain browser preview), and its actual
+   scanning accuracy can't be verified without a real camera + real paper,
+   so treat this as the most experimental feature in this update. */
+async function scanPastPaperPhoto(target){
+  const Camera = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
+  const TextRecognition = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextRecognition;
+  if(!Camera || !TextRecognition){
+    alert('Photo scanning only works in the installed app, not this preview. Paste the text instead for now.');
+    return;
+  }
+  try{
+    const photo = await Camera.getPhoto({ resultType: 'uri', source: 'PROMPT', quality: 90 });
+    const result = await TextRecognition.recognize({ path: photo.path });
+    const text = (result && result.blocks ? result.blocks.map(b=>b.text).join('\n') : '') || '';
+    if(!text){ alert('No text was detected in that photo — try a clearer, well-lit shot.'); return; }
+    const fieldId = target==='a' ? 'fPastPaperA' : 'fPastPaperQ';
+    const field = document.getElementById(fieldId);
+    if(field) field.value = (field.value ? field.value + '\n' : '') + text;
+  }catch(e){
+    alert('Could not scan that photo. You can always paste the text in manually instead.');
+  }
 }
 
 document.body.setAttribute('data-theme', state.settings.theme);
@@ -288,7 +368,6 @@ function rateCard(card, rating, skipUndo){
   if(!state.stats.reviewLog) state.stats.reviewLog = [];
   state.stats.reviewLog.push({ date: todayStr(), subject: card.subject });
   if(state.stats.reviewLog.length > 2000) state.stats.reviewLog = state.stats.reviewLog.slice(-2000);
-
   updateStreak();
   persistAll();
 }
@@ -298,7 +377,7 @@ function applyRevisionLogic(card, rating){
   if(!card.revision) return;
   if(rating === 'hard'){
     card.revisionStreak = 0;
-    } else {
+  } else {
     card.revisionStreak = (card.revisionStreak||0) + 1;
     if(card.revisionStreak >= 4){
       card.revision = false;
@@ -384,11 +463,22 @@ function parseNumbered(text){
   const lines = (text||'').split(/\r?\n/);
   const map = {};
   let curNum = null;
-  const numRe = /^\s*(?:q(?:uestion)?\s*)?(\d{1,3})\s*[\.\)\:]\s*(.*)$/i;
+  // Decimal-style sub-questions (5.1, 12.3) — the embedded dot itself is the
+  // signal, so a trailing delimiter is optional (avoids requiring "5.1." which
+  // real papers rarely use). Tried first since it's the more specific pattern.
+  const decRe = /^\s*(?:q(?:uestion)?\s*)?(\d{1,3}(?:\.\d{1,2}){1,4})(?:\s*[\.\)\:])?\s+(.*)$/i;
+  // Plain integers (5., 5), Q5)) — delimiter required so we don't accidentally
+  // treat a line like "2 N2O5(g) → ..." (a chemical equation) as question "2".
+  const intRe = /^\s*(?:q(?:uestion)?\s*)?(\d{1,3})\s*[\.\)\:]\s*(.*)$/i;
+  // A bare section heading like "QUESTION 8" (no period/decimal after it) isn't
+  // itself a question — it just means "stop appending to the previous card".
+  const headingRe = /^\s*question\s+\d{1,3}\s*(\(|$)/i;
   lines.forEach(line=>{
-    const m = line.match(numRe);
+    if(headingRe.test(line)){ curNum = null; return; }
+    const dm = line.match(decRe);
+    const m = dm || line.match(intRe);
     if(m){
-      curNum = parseInt(m[1],10);
+      curNum = m[1];
       map[curNum] = (m[2]||'').trim();
     } else if(curNum !== null && line.trim()){
       map[curNum] = (map[curNum] ? map[curNum]+' ' : '') + line.trim();
@@ -396,10 +486,26 @@ function parseNumbered(text){
   });
   return map;
 }
-function buildPastPaperCards(questionsText, memoText){
+function compareNumberKeys(a,b){
+  const as = a.split('.').map(Number), bs = b.split('.').map(Number);
+  for(let i=0; i<Math.max(as.length,bs.length); i++){
+    const av = as[i]===undefined ? -1 : as[i];
+    const bv = bs[i]===undefined ? -1 : bs[i];
+    if(av !== bv) return av - bv;
+  }
+  return 0;
+}
+function sortedNumberKeys(map){
+  return Object.keys(map).sort(compareNumberKeys);
+}
+function buildPastPaperCards(questionsText, memoText, onlyList){
   const qMap = parseNumbered(questionsText);
   const aMap = parseNumbered(memoText || '');
-  const numbers = Object.keys(qMap).map(Number).sort((a,b)=>a-b);
+  let numbers = sortedNumberKeys(qMap);
+  if(onlyList && onlyList.length > 0){
+    const wanted = new Set(onlyList.map(n=>n.trim()).filter(Boolean));
+    numbers = numbers.filter(n => wanted.has(n));
+  }
   return numbers.map(n=>({ question: qMap[n], answer: aMap[n] || '', needsAnswer: !aMap[n] }));
 }
 
@@ -440,6 +546,19 @@ function deleteTopic(subjectId, topicId){
   state.cards.forEach(c=>{ if(c.subject===subjectId && c.topic===topicId) c.topic=null; });
   persistAll();
 }
+function moveArrayItem(arr, id, direction){
+  const i = arr.findIndex(x=>x.id===id);
+  if(i===-1) return;
+  const j = direction==='up' ? i-1 : i+1;
+  if(j<0 || j>=arr.length) return;
+  const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+}
+function moveSubject(id, direction){ moveArrayItem(state.subjects, id, direction); persistAll(); }
+  function moveTopic(subjectId, topicId, direction){
+  const s = state.subjects.find(x=>x.id===subjectId); if(!s || !s.topics) return;
+  moveArrayItem(s.topics, topicId, direction);
+  persistAll();
+}
 
 /* ---------------- Export scope as text ---------------- */
 function exportCardsAsText(cards, filename){
@@ -448,7 +567,7 @@ function exportCardsAsText(cards, filename){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = (filename||'recall-export') + '.txt'; a.click();
-  }
+}
 
 function level(){ return Math.floor(state.stats.xp / 100) + 1; }
 function xpIntoLevel(){ return state.stats.xp % 100; }
@@ -591,6 +710,8 @@ function renderHome(){
       }).join('')}
     </div>
 
+    <div class="feedback-banner" style="background:var(--surface); border-color:var(--border);">⏱️ You've studied <strong style="color:var(--text)">${formatDuration(weeklyStudySeconds())}</strong> this week</div>
+
     <h2 class="section-title">Weekly feedback</h2>
     <div class="feedback-banner">💬 ${feedback}</div>
 
@@ -598,7 +719,7 @@ function renderHome(){
       <strong style="font-size:14px;">Accuracy — last 4 weeks</strong>
       <canvas id="accuracyChart" width="480" height="120"></canvas>
     </div>
-    </div>`;
+  </div>`;
 }
 
 function greetingTime(){
@@ -650,15 +771,21 @@ function renderBrowse(){
 
   const activeSubj = state.subjects.find(s=>s.id===f.subject);
   const topics = (activeSubj && activeSubj.topics) || [];
+  const bulkMode = !!window._bulkMode;
+  const selected = window._bulkSelected || [];
 
   return `
   <div class="topbar"><div class="brand">Browse</div>
     <div style="display:flex; gap:6px;">
+      ${!bulkMode ? `
+      <button class="icon-btn" data-action="toggle-bulk-mode" title="Select multiple">☑️</button>
       <button class="icon-btn" data-action="quick-add-here" title="Add card here">➕</button>
       <button class="icon-btn" data-action="export-scope" title="Export this list">📤</button>
+      ` : `<button class="btn btn-ghost btn-sm" data-action="toggle-bulk-mode">Cancel</button>`}
     </div>
   </div>
   <div class="screen" style="padding-top:0;">
+    ${bulkMode ? `<div class="feedback-banner">${selected.length} selected</div>` : ''}
     <div class="search-bar">
       <input type="text" placeholder="Search cards..." value="${escapeAttr(f.query)}" oninput="onSearchInput(this.value)">
     </div>
@@ -681,7 +808,14 @@ function renderBrowse(){
       <option value="reviewed" ${f.sort==='reviewed'?'selected':''}>Most reviewed</option>
     </select>
 
-    ${cards.length===0 ? `<div class="empty-state"><div class="big-emoji">🗂️</div>No cards match yet.<br>Tap + to add your first card.</div>` : cards.map(c=>renderListCard(c)).join('')}
+    ${cards.length===0 ? `<div class="empty-state"><div class="big-emoji">🗂️</div>No cards match yet.<br>Tap + to add your first card.</div>` : cards.map(c=>renderListCard(c, bulkMode, selected.includes(c.id))).join('')}
+    ${bulkMode && selected.length>0 ? `<div class="card" style="position:sticky; bottom:8px;">
+      <div class="row-between" style="gap:6px;">
+        <button class="btn btn-outline btn-sm" data-action="bulk-tag">Tag</button>
+        <button class="btn btn-outline btn-sm" data-action="bulk-move">Move</button>
+        <button class="btn btn-primary btn-sm" style="background:var(--red);" data-action="bulk-delete">Delete</button>
+      </div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -691,11 +825,12 @@ function allTags(){
   return [...set];
 }
 
-function renderListCard(c){
+function renderListCard(c, bulkMode, isSelected){
   const subj = state.subjects.find(s=>s.id===c.subject);
   const topic = subj && (subj.topics||[]).find(t=>t.id===c.topic);
-  return `<div class="list-card" data-action="edit-card" data-val="${c.id}" ${c.color?`style="border-left:4px solid ${c.color};"`:''}>
+  return `<div class="list-card" data-action="${bulkMode?'toggle-bulk-select':'edit-card'}" data-val="${c.id}" ${c.color?`style="border-left:4px solid ${c.color};"`:''}>
     <div class="list-card-top">
+      ${bulkMode ? `<div style="padding-right:10px; padding-top:2px;">${isSelected?'☑️':'⬜'}</div>` : ''}
       <div style="flex:1;">
         <div class="list-q">${escapeHtml(c.question)}${isStale(c) ? `<span class="stale-badge">🕓 stale</span>` : ''}</div>
         <div class="list-a">${escapeHtml(c.answer)}</div>
@@ -707,7 +842,7 @@ function renderListCard(c){
           ${c.revision ? `<span class="tag-mini" style="color:var(--accent)">🔁 Revision</span>` : ''}
         </div>
       </div>
-      <button class="icon-btn" data-action="delete-card" data-val="${c.id}" onclick="event.stopPropagation()">🗑️</button>
+      ${!bulkMode ? `<button class="icon-btn" data-action="delete-card" data-val="${c.id}" onclick="event.stopPropagation()">🗑️</button>` : ''}
     </div>
   </div>`;
 }
@@ -719,9 +854,25 @@ function startStudySession(cardIds, direction){
   const ids = shuffle([...cardIds]);
   const cardDirection = {};
   ids.forEach(id=>{ cardDirection[id] = dir==='mixed' ? (Math.random()<0.5?'forward':'reverse') : dir; });
-  state.studySession = { ids, index:0, flipped:false, results:[], cardDirection };
+  state.studySession = { ids, index:0, flipped:false, results:[], cardDirection, times:[], cardShownAt: Date.now() };
   state.view = 'study';
   render();
+}
+function logStudyTime(seconds){
+  if(!state.stats.studyTimeLog) state.stats.studyTimeLog = [];
+  state.stats.studyTimeLog.push({ date: todayStr(), seconds });
+  if(state.stats.studyTimeLog.length > 3000) state.stats.studyTimeLog = state.stats.studyTimeLog.slice(-3000);
+}
+function weeklyStudySeconds(){
+  const log = state.stats.studyTimeLog || [];
+  return log.filter(e => daysBetween(e.date, todayStr()) < 7).reduce((s,e)=>s+e.seconds, 0);
+}
+function formatDuration(totalSeconds){
+  const h = Math.floor(totalSeconds/3600);
+  const m = Math.floor((totalSeconds%3600)/60);
+  if(h>0) return `${h}h ${m}m`;
+  if(m>0) return `${m}m`;
+  return `${Math.round(totalSeconds)}s`;
 }
 function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
 function promptAndAnswer(card, dir){
@@ -733,11 +884,13 @@ function renderStudy(){
   if(!s) return `<div class="screen empty-state"><div class="big-emoji">📚</div>No active session.</div>`;
   if(s.index >= s.ids.length){
     const known = s.results.filter(r=>r!=='hard').length;
+    const avgTime = s.times && s.times.length ? (s.times.reduce((a,b)=>a+b,0)/s.times.length) : 0;
     return `<div class="screen">
       <div class="exam-result">
         <div class="big-emoji">🎉</div>
         <div class="exam-score">${known}/${s.results.length}</div>
         <div class="sub">cards marked as known</div>
+        ${s.times && s.times.length ? `<div class="sub" style="margin-top:4px;">Averaged ${avgTime.toFixed(1)}s per card</div>` : ''}
         <button class="btn btn-primary" style="margin-top:20px;" data-action="go-home">Back to dashboard</button>
       </div>
     </div>`;
@@ -747,6 +900,7 @@ function renderStudy(){
   const dir = (s.cardDirection && s.cardDirection[card.id]) || 'forward';
   const pa = promptAndAnswer(card, dir);
   const progressSegs = s.ids.map((_,i)=>`<div class="seg ${i<s.index?'done':''}"></div>`).join('');
+
   return `
   <div class="topbar"><button class="icon-btn" data-action="exit-study">✕</button><div class="brand" style="font-size:16px;">Study</div>${lastAction ? `<button class="icon-btn" data-action="undo-swipe" title="Undo">↩️</button>` : `<div style="width:38px"></div>`}</div>
   <div class="screen" style="padding-top:0;">
@@ -771,9 +925,8 @@ function renderStudy(){
         </div>` : ''}
     </div>
   </div>`;
-}
-
-/* Single shared drag-state object + ONE set of window-level listeners bound once
+  }
+  /* Single shared drag-state object + ONE set of window-level listeners bound once
    for the lifetime of the app. attachSwipeHandlers() just re-points drag.el on
    every render instead of re-registering window listeners (avoids a listener
    leak that would make swiping feel laggier the longer a study session runs).
@@ -879,6 +1032,10 @@ function quickRate(rating){
   const s = state.studySession; if(!s) return;
   const card = state.cards.find(c=>c.id===s.ids[s.index]);
   rateCard(card, s.flipped ? rating : rating); // if not flipped yet (swipe before flip), still rate
+  const elapsed = (Date.now() - (s.cardShownAt||Date.now())) / 1000;
+  s.times.push(elapsed);
+  logStudyTime(elapsed);
+  s.cardShownAt = Date.now();
   s.results.push(rating);
   s.index += 1;
   s.flipped = false;
@@ -893,7 +1050,7 @@ function renderExamSetup(){
     <div class="card">
       <label class="field-label">Subject / Folder</label>
       <select id="examSubject">
-      <option value="">All subjects</option>
+        <option value="">All subjects</option>
         ${state.subjects.map(s=>`<option value="${s.id}">${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
       </select>
       <label class="field-label">Number of questions</label>
@@ -945,12 +1102,12 @@ function renderExamResult(){
       <div class="big-emoji">${pct>=80?'🏆':pct>=50?'👍':'💪'}</div>
       <div class="exam-score">${r.score}/${r.cards.length}</div>
       <div class="sub">${pct}% correct</div>
+      ${r.times && r.times.length ? `<div class="sub" style="margin-top:4px;">Averaged ${(r.times.reduce((a,b)=>a+b,0)/r.times.length).toFixed(1)}s per card</div>` : ''}
       <button class="btn btn-primary" style="margin-top:20px;" data-action="go-home">Back to dashboard</button>
     </div>
   </div>`;
-}
-
-let examTimerInterval = null;
+    }
+  let examTimerInterval = null;
 function beginExam(){
   const subjectId = document.getElementById('examSubject').value;
   const count = parseInt(document.getElementById('examCount').value)||10;
@@ -964,7 +1121,7 @@ function beginExam(){
   if(pool.length===0){ alert('No cards match those filters yet.'); return; }
   const cardDirection = {};
   pool.forEach(c=>{ cardDirection[c.id] = direction==='mixed' ? (Math.random()<0.5?'forward':'reverse') : direction; });
-  state.examSession = { cards: pool, index:0, revealed:false, score:0, perQ, timeLeft: perQ, cardDirection };
+  state.examSession = { cards: pool, index:0, revealed:false, score:0, perQ, timeLeft: perQ, cardDirection, times:[], cardShownAt: Date.now() };
   state.view = 'examSession';
   render();
   startExamTimer();
@@ -981,7 +1138,10 @@ function startExamTimer(){
 }
 function nextExamQuestion(){
   const s = state.examSession;
-  s.index += 1; s.revealed = false; s.timeLeft = s.perQ;
+  const elapsed = (Date.now() - (s.cardShownAt||Date.now())) / 1000;
+  s.times.push(elapsed);
+  logStudyTime(elapsed);
+  s.index += 1; s.revealed = false; s.timeLeft = s.perQ; s.cardShownAt = Date.now();
   if(s.index >= s.cards.length){
     clearInterval(examTimerInterval);
     state.view = 'examResult';
@@ -1035,15 +1195,40 @@ function renderModal(){
   div.className = 'modal-overlay';
   const builders = {
     add: addEditModalHtml, import: importModalHtml, settings: settingsModalHtml,
-    startPicker: startPickerModalHtml, manageSubjects: manageSubjectsModalHtml, manageTopics: manageTopicsModalHtml
+    startPicker: startPickerModalHtml, manageSubjects: manageSubjectsModalHtml, manageTopics: manageTopicsModalHtml,
+    bulkMove: bulkMoveModalHtml
   };
   div.innerHTML = (builders[modalState] || settingsModalHtml)();
   div.addEventListener('click', (e)=>{ if(e.target===div){ modalState=null; state.editingCard=null; render(); } });
   document.body.appendChild(div);
   attachModalHandlers();
-  }
-  function startPickerModalHtml(){
+}
+
+function bulkMoveModalHtml(){
+  const count = (window._bulkSelected||[]).length;
+  if(!window._bulkMoveSubject) window._bulkMoveSubject = state.subjects[0] ? state.subjects[0].id : '';
+  const subj = state.subjects.find(s=>s.id===window._bulkMoveSubject);
+  const topics = (subj && subj.topics) || [];
+  return `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Move ${count} card${count>1?'s':''} to...</div>
+    <label class="field-label">Subject</label>
+    <select id="bulkMoveSubject" onchange="window._bulkMoveSubject=this.value; window._bulkMoveTopic=null; render();">
+      ${state.subjects.map(s=>`<option value="${s.id}" ${window._bulkMoveSubject===s.id?'selected':''}>${s.icon} ${escapeHtml(s.name)}</option>`).join('')}
+    </select>
+    ${topics.length>0 ? `<label class="field-label">Topic (optional)</label>
+    <select id="bulkMoveTopic">
+      <option value="">No topic</option>
+      ${topics.map(t=>`<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}
+    </select>` : `<input type="hidden" id="bulkMoveTopic" value="">`}
+    <button class="btn btn-primary btn-block" data-action="apply-bulk-move">Move</button>
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" data-action="close-modal">Cancel</button>
+  </div>`;
+}
+
+function startPickerModalHtml(){
   const cramCount = state.cards.filter(c=>c.priority || c.difficulty==='hard').length;
+  const expanded = window._startPickerExpanded;
   return `<div class="modal-sheet">
     <div class="sheet-handle"></div>
     <div class="sheet-title">What do you want to study?</div>
@@ -1051,7 +1236,20 @@ function renderModal(){
     <button class="btn btn-outline btn-block" style="margin-bottom:10px;" data-action="start-cram">🔥 Cram mode — Hard + Priority (${cramCount})</button>
     ${state.subjects.map(s=>{
       const count = dueCards(state.cards.filter(c=>c.subject===s.id)).length;
-      return `<button class="btn btn-ghost btn-block" style="margin-bottom:8px; text-align:left;" data-action="start-scope-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)} (${count} due)</button>`;
+      const topics = s.topics || [];
+      const isExpanded = expanded === s.id;
+      return `<div style="margin-bottom:8px;">
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-ghost btn-block" style="text-align:left;" data-action="start-scope-subject" data-val="${s.id}">${s.icon} ${escapeHtml(s.name)} (${count} due)</button>
+          ${topics.length>0 ? `<button class="icon-btn" data-action="toggle-start-topics" data-val="${s.id}">${isExpanded?'▲':'▼'}</button>` : ''}
+        </div>
+        ${isExpanded && topics.length>0 ? `<div style="padding-left:14px; margin-top:6px;">
+          ${topics.map(t=>{
+            const tCount = dueCards(state.cards.filter(c=>c.subject===s.id && c.topic===t.id)).length;
+            return `<button class="btn btn-ghost btn-block" style="text-align:left; margin-bottom:6px; font-size:13px;" data-action="start-scope-topic" data-val="${s.id}|${t.id}">📁 ${escapeHtml(t.name)} (${tCount} due)</button>`;
+          }).join('')}
+        </div>` : ''}
+      </div>`;
     }).join('')}
   </div>`;
 }
@@ -1060,10 +1258,12 @@ function manageSubjectsModalHtml(){
   return `<div class="modal-sheet">
     <div class="sheet-handle"></div>
     <div class="sheet-title">Manage subjects (${state.subjects.length}/${MAX_SUBJECTS})</div>
-    ${state.subjects.map(s=>`<div class="list-card">
+    ${state.subjects.map((s,i)=>`<div class="list-card">
       <div class="row-between">
         <div class="subject-name"><span class="dot" style="background:${s.color}"></span>${s.icon} ${escapeHtml(s.name)}</div>
-        <div style="display:flex; gap:6px;">
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-action="move-subject-up" data-val="${s.id}" ${i===0?'disabled style="opacity:.3;"':''}>⬆️</button>
+          <button class="icon-btn" data-action="move-subject-down" data-val="${s.id}" ${i===state.subjects.length-1?'disabled style="opacity:.3;"':''}>⬇️</button>
           <button class="icon-btn" data-action="manage-topics" data-val="${s.id}">📁</button>
           <button class="icon-btn" data-action="rename-subject" data-val="${s.id}">✏️</button>
           <button class="icon-btn" data-action="delete-subject" data-val="${s.id}">🗑️</button>
@@ -1082,15 +1282,17 @@ function manageTopicsModalHtml(){
   return `<div class="modal-sheet">
     <div class="sheet-handle"></div>
     <div class="sheet-title">${s.icon} ${escapeHtml(s.name)} — Topics (${topics.length}/${MAX_TOPICS_PER_SUBJECT})</div>
-    ${topics.map(t=>`<div class="list-card">
+    ${topics.map((t,i)=>`<div class="list-card">
       <div class="row-between">
         <span>${escapeHtml(t.name)}</span>
-        <div style="display:flex; gap:6px;">
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-action="move-topic-up" data-val="${t.id}" ${i===0?'disabled style="opacity:.3;"':''}>⬆️</button>
+          <button class="icon-btn" data-action="move-topic-down" data-val="${t.id}" ${i===topics.length-1?'disabled style="opacity:.3;"':''}>⬇️</button>
           <button class="icon-btn" data-action="rename-topic" data-val="${t.id}">✏️</button>
           <button class="icon-btn" data-action="delete-topic" data-val="${t.id}">🗑️</button>
         </div>
       </div>
-    </div>`).join('')}
+      </div>`).join('')}
     ${topics.length < MAX_TOPICS_PER_SUBJECT ? `<button class="btn btn-primary btn-block" data-action="add-topic">+ Add topic</button>` : `<div class="sub">Maximum of ${MAX_TOPICS_PER_SUBJECT} topics reached.</div>`}
     <button class="btn btn-ghost btn-block" style="margin-top:8px;" data-action="close-modal">Back</button>
   </div>`;
@@ -1171,9 +1373,13 @@ function importFormHtml(){
     <textarea id="fImportText" placeholder="Paste up to 100+ pairs. Works with:&#10;Q: ...  A: ...&#10;— or —&#10;question [TAB] answer per line&#10;— or —&#10;question&#10;answer&#10;(blank line between cards)" style="min-height:160px;"></textarea>
     ` : `
     <label class="field-label">Paste the question paper</label>
+    <button class="btn btn-outline btn-block" style="margin-bottom:8px;" data-action="scan-past-paper" data-val="q">📷 Scan a photo instead</button>
     <textarea id="fPastPaperQ" placeholder="1. What is Newton's second law?&#10;2. Define momentum." style="min-height:120px;"></textarea>
     <label class="field-label">Paste the memo (optional — unanswered questions still get added)</label>
+    <button class="btn btn-outline btn-block" style="margin-bottom:8px;" data-action="scan-past-paper" data-val="a">📷 Scan a photo instead</button>
     <textarea id="fPastPaperA" placeholder="1. F = ma&#10;2. Mass times velocity" style="min-height:120px;"></textarea>
+    <label class="field-label">Only include these numbers (optional)</label>
+    <input type="text" id="fPastPaperOnly" placeholder="e.g. 5.1, 5.3, 6 — leave blank for the whole paper">
     `}
     <label class="field-label">Assign to subject</label>
     <select id="fImportSubject" onchange="onFormSubjectChange(this.value)">
@@ -1208,6 +1414,8 @@ function settingsModalHtml(){
     <div class="chip-row">
       <div class="chip ${s.theme==='dark'?'selected':''}" data-action="set-theme" data-val="dark">🌙 Dark</div>
       <div class="chip ${s.theme==='light'?'selected':''}" data-action="set-theme" data-val="light">☀️ Light</div>
+      <div class="chip ${s.theme==='forest'?'selected':''}" data-action="set-theme" data-val="forest">🌲 Forest</div>
+      <div class="chip ${s.theme==='sunset'?'selected':''}" data-action="set-theme" data-val="sunset">🌇 Sunset</div>
     </div>
 
     <h2 class="section-title">Weekly goals per subject</h2>
@@ -1218,11 +1426,16 @@ function settingsModalHtml(){
 
     <button class="btn btn-primary btn-block" style="margin-top:6px;" data-action="save-settings">Save</button>
 
+    <h2 class="section-title">Notifications</h2>
+    <button class="btn btn-outline btn-block" data-action="enable-notifications">🔔 Enable revision reminders</button>
+
     <h2 class="section-title">Subjects & topics</h2>
     <button class="btn btn-outline btn-block" data-action="manage-subjects">Manage subjects (${state.subjects.length}/${MAX_SUBJECTS})</button>
 
     <h2 class="section-title">Data</h2>
     <button class="btn btn-outline btn-block" data-action="export-data">Export all data (backup)</button>
+    <label class="field-label" style="margin-top:10px;">Restore from a backup file</label>
+    <input type="file" id="fRestoreFile" accept="application/json" onchange="restoreData(this)">
   </div>`;
 }
 
@@ -1265,7 +1478,7 @@ function handleAction(e){
   if(action==='delete-card'){
     if(confirm('Delete this card?')){ state.cards = state.cards.filter(c=>c.id!==val); persistAll(); render(); }
     return;
-  }
+    }
   if(action==='preview-import'){ previewImport(); return; }
   if(action==='confirm-import'){ confirmImport(); return; }
 
@@ -1286,6 +1499,17 @@ function handleAction(e){
     startStudySession(dueCards(state.cards.filter(c=>c.subject===val)).map(c=>c.id));
     return;
   }
+  if(action==='toggle-start-topics'){
+    window._startPickerExpanded = (window._startPickerExpanded===val) ? null : val;
+    render();
+    return;
+  }
+  if(action==='start-scope-topic'){
+    const [subjId, topicId] = val.split('|');
+    modalState=null;
+    startStudySession(dueCards(state.cards.filter(c=>c.subject===subjId && c.topic===topicId)).map(c=>c.id));
+    return;
+  }
   if(action==='start-cram'){
     modalState=null;
     startStudySession(state.cards.filter(c=>c.priority || c.difficulty==='hard').map(c=>c.id));
@@ -1293,7 +1517,13 @@ function handleAction(e){
   }
   if(action==='exit-study'){ state.view='home'; state.studySession=null; render(); return; }
   if(action==='show-hint'){ const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]); if(card.hint) alert('Hint: '+card.hint); return; }
-  if(action==='rate'){ const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]); rateCard(card,val); s.results.push(val); s.index+=1; s.flipped=false; persistAll(); render(); return; }
+  if(action==='rate'){
+    const s=state.studySession; const card=state.cards.find(c=>c.id===s.ids[s.index]);
+    rateCard(card,val);
+    const elapsed = (Date.now() - (s.cardShownAt||Date.now())) / 1000;
+    s.times.push(elapsed); logStudyTime(elapsed); s.cardShownAt = Date.now();
+    s.results.push(val); s.index+=1; s.flipped=false; persistAll(); render(); return;
+  }
   if(action==='undo-swipe'){ undoLastAction(); const s=state.studySession; if(s && s.index>0){ s.index-=1; s.results.pop(); } render(); return; }
   if(action==='toggle-priority'){ const c=state.cards.find(x=>x.id===val); if(c){ c.priority=!c.priority; persistAll(); } render(); return; }
   if(action==='toggle-revision'){ const c=state.cards.find(x=>x.id===val); if(c){ c.revision=!c.revision; if(c.revision) c.revisionStreak=0; persistAll(); } render(); return; }
@@ -1311,6 +1541,55 @@ function handleAction(e){
     modalState='add'; window._addTab='manual'; state.editingCard=null;
     window._quickAddSubject = state.browseFilter.subject || (state.subjects[0] && state.subjects[0].id);
     window._quickAddTopic = state.browseFilter.topic || null;
+    render();
+    return;
+  }
+  if(action==='toggle-bulk-mode'){ window._bulkMode = !window._bulkMode; window._bulkSelected = []; render(); return; }
+  if(action==='toggle-bulk-select'){
+    window._bulkSelected = window._bulkSelected || [];
+    const idx = window._bulkSelected.indexOf(val);
+    if(idx===-1) window._bulkSelected.push(val); else window._bulkSelected.splice(idx,1);
+    render();
+    return;
+  }
+  if(action==='bulk-delete'){
+    const ids = window._bulkSelected || [];
+    if(ids.length===0) return;
+    if(confirm(`Delete ${ids.length} card${ids.length>1?'s':''}? This can't be undone.`)){
+      state.cards = state.cards.filter(c=>!ids.includes(c.id));
+      window._bulkSelected = []; window._bulkMode = false;
+      persistAll();
+    }
+    render();
+    return;
+  }
+  if(action==='bulk-tag'){
+    const ids = window._bulkSelected || [];
+    if(ids.length===0) return;
+    const tag = prompt('Add tag to selected cards:');
+    if(tag){
+      state.cards.forEach(c=>{ if(ids.includes(c.id)){ c.tags = c.tags||[]; if(!c.tags.includes(tag)) c.tags.push(tag); } });
+      persistAll();
+    }
+    render();
+    return;
+  }
+  if(action==='bulk-move'){
+    if((window._bulkSelected||[]).length===0) return;
+    modalState = 'bulkMove';
+    render();
+    return;
+  }
+  if(action==='apply-bulk-move'){
+    const subject = document.getElementById('bulkMoveSubject').value;
+    const topicEl = document.getElementById('bulkMoveTopic');
+    const topic = topicEl ? (topicEl.value || null) : null;
+    const ids = window._bulkSelected || [];
+    state.cards.forEach(c=>{ if(ids.includes(c.id)){ c.subject = subject; c.topic = topic; } });
+    persistAll();
+    window._bulkSelected = []; window._bulkMode = false;
+    modalState = null;
+    state.view = 'browse';
     render();
     return;
   }
@@ -1334,6 +1613,8 @@ function handleAction(e){
     render();
     return;
   }
+  if(action==='move-subject-up'){ moveSubject(val,'up'); render(); return; }
+  if(action==='move-subject-down'){ moveSubject(val,'down'); render(); return; }
   if(action==='manage-topics'){ window._manageTopicsSubject = val; modalState='manageTopics'; render(); return; }
   if(action==='add-topic'){
     const name = prompt('New topic name:');
@@ -1352,7 +1633,10 @@ function handleAction(e){
     render();
     return;
   }
+  if(action==='move-topic-up'){ moveTopic(window._manageTopicsSubject, val, 'up'); render(); return; }
+  if(action==='move-topic-down'){ moveTopic(window._manageTopicsSubject, val, 'down'); render(); return; }
   if(action==='past-paper-toggle'){ window._pastPaperMode = !window._pastPaperMode; render(); return; }
+  if(action==='scan-past-paper'){ scanPastPaperPhoto(val); return; }
   if(action==='preview-past-paper'){ previewPastPaper(); return; }
 
   if(action==='begin-exam'){ beginExam(); return; }
@@ -1367,6 +1651,7 @@ function handleAction(e){
   if(action==='set-theme'){ state.settings.theme = val; document.body.setAttribute('data-theme', val); render(); return; }
   if(action==='save-settings'){ saveSettings(); return; }
   if(action==='export-data'){ exportData(); return; }
+  if(action==='enable-notifications'){ requestNotificationPermissionManually(); return; }
 }
 
 function onSearchInput(v){ state.browseFilter.query = v; render(); var _si = document.querySelector('.search-bar input'); if(_si) _si.focus(); }
@@ -1379,7 +1664,7 @@ function readImageInput(inputEl){
     const reader = new FileReader();
     reader.onload = ()=> resolve(reader.result);
     reader.readAsDataURL(file);
-  });
+    });
 }
 
 async function saveNewCard(){
@@ -1393,9 +1678,10 @@ async function saveNewCard(){
   const priority = document.getElementById('fPriority').checked;
   const revision = document.getElementById('fRevision').checked;
   const colorEl = document.querySelector('#fColorRow .color-swatch.selected');
-  const color = colorEl ? (colorEl.dataset.color || null) : null;
+  const color = (colorEl && colorEl.dataset.color) ? colorEl.dataset.color : autoAssignColor(subject);
   const tags = [...document.querySelectorAll('#fTags .chip.selected')].map(c=>c.dataset.tag);
   const image = await readImageInput(document.getElementById('fImage'));
+  if(findDuplicate(q, subject) && !confirm('A very similar card already exists in this subject. Add it anyway?')) return;
   state.cards.push({
     id: uid(), question:q, answer:a, hint, subject, topic, tags, priority, revision, revisionStreak:0, color, image: image||null,
     createdAt: Date.now(), reviewCount:0, difficulty:null, srs: initSRS()
@@ -1403,6 +1689,13 @@ async function saveNewCard(){
   persistAll();
   window._quickAddSubject = null; window._quickAddTopic = null;
   modalState = null; state.view='browse'; render();
+}
+
+function normalizeQuestionText(text){ return (text||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function findDuplicate(question, subjectId){
+  const norm = normalizeQuestionText(question);
+  if(!norm) return null;
+  return state.cards.find(c => c.subject===subjectId && normalizeQuestionText(c.question)===norm) || null;
 }
 
 async function saveEditCard(id){
@@ -1418,7 +1711,7 @@ async function saveEditCard(id){
   c.revision = document.getElementById('fRevision').checked;
   if(!c.revision) c.revisionStreak = 0;
   const colorEl = document.querySelector('#fColorRow .color-swatch.selected');
-  c.color = colorEl ? (colorEl.dataset.color || null) : null;
+  c.color = (colorEl && colorEl.dataset.color) ? colorEl.dataset.color : (c.color || autoAssignColor(c.subject));
   c.tags = [...document.querySelectorAll('#fTags .chip.selected')].map(x=>x.dataset.tag);
   const newImage = await readImageInput(document.getElementById('fImage'));
   if(newImage) c.image = newImage;
@@ -1429,15 +1722,18 @@ async function saveEditCard(id){
 let lastPreviewedCards = [];
 function previewImport(){
   const text = document.getElementById('fImportText').value;
+  const subject = document.getElementById('fImportSubject').value;
   const cards = parseImportText(text);
+  cards.forEach(c=>{ c.isDuplicate = !!findDuplicate(c.question, subject); });
   lastPreviewedCards = cards;
   const box = document.getElementById('importPreview');
   if(cards.length===0){
     box.innerHTML = `<div class="feedback-banner">Couldn't detect card pairs. Try one per line as <em>question&nbsp;&#8594;TAB&#8594;&nbsp;answer</em>, or use Q: / A: labels.</div>`;
     return;
   }
-  box.innerHTML = `<div class="feedback-banner">Found ${cards.length} card${cards.length>1?'s':''} ✅</div>
-    ${cards.slice(0,6).map(c=>`<div class="list-card"><div class="list-q">${escapeHtml(c.question)}</div><div class="list-a">${escapeHtml(c.answer)}</div></div>`).join('')}
+  const dupeCount = cards.filter(c=>c.isDuplicate).length;
+  box.innerHTML = `<div class="feedback-banner">Found ${cards.length} card${cards.length>1?'s':''} ✅ ${dupeCount>0?`(⚠️ ${dupeCount} look like possible duplicates)`:''}</div>
+    ${cards.slice(0,6).map(c=>`<div class="list-card"><div class="list-q">${escapeHtml(c.question)}${c.isDuplicate?' <span class="stale-badge">⚠️ possible duplicate</span>':''}</div><div class="list-a">${escapeHtml(c.answer)}</div></div>`).join('')}
     ${cards.length>6 ? `<div class="sub">+ ${cards.length-6} more...</div>` : ''}
     <button class="btn btn-primary btn-block" style="margin-top:10px;" data-action="confirm-import">Import ${cards.length} card${cards.length>1?'s':''}</button>`;
   document.querySelector('[data-action="confirm-import"]').addEventListener('click', handleAction);
@@ -1448,7 +1744,7 @@ function confirmImport(){
   const topic = topicEl ? (topicEl.value || null) : null;
   lastPreviewedCards.forEach(c=>{
     state.cards.push({
-      id: uid(), question:c.question, answer:c.answer, hint:'', subject, topic, tags:[], priority:false, revision:false, revisionStreak:0, color:null, image:null,
+      id: uid(), question:c.question, answer:c.answer, hint:'', subject, topic, tags:[], priority:false, revision:false, revisionStreak:0, color:autoAssignColor(subject), image:null,
       createdAt: Date.now()+Math.random(), reviewCount:0, difficulty:null, srs: initSRS()
     });
   });
@@ -1460,16 +1756,21 @@ function confirmImport(){
 function previewPastPaper(){
   const qText = document.getElementById('fPastPaperQ').value;
   const aText = document.getElementById('fPastPaperA').value;
-  const cards = buildPastPaperCards(qText, aText);
+  const onlyRaw = (document.getElementById('fPastPaperOnly').value || '').trim();
+  const onlyList = onlyRaw ? onlyRaw.split(',').map(s=>s.trim()).filter(Boolean) : null;
+  const subject = document.getElementById('fImportSubject').value;
+  const cards = buildPastPaperCards(qText, aText, onlyList);
+  cards.forEach(c=>{ c.isDuplicate = !!findDuplicate(c.question, subject); });
   lastPreviewedCards = cards;
   const box = document.getElementById('importPreview');
   if(cards.length===0){
-    box.innerHTML = `<div class="feedback-banner">Couldn't detect numbered questions. Try "1. ..." or "Q1) ..." style numbering.</div>`;
+    box.innerHTML = `<div class="feedback-banner">${onlyList ? "None of those question numbers were found — check the numbers match what's in the pasted paper." : 'Couldn\'t detect numbered questions. Try "1. ..." or "Q1) ..." style numbering.'}</div>`;
     return;
   }
   const missingCount = cards.filter(c=>c.needsAnswer).length;
-  box.innerHTML = `<div class="feedback-banner">Found ${cards.length} question${cards.length>1?'s':''} ✅ ${missingCount>0?`(${missingCount} still need answers — you can edit them after import)`:''}</div>
-    ${cards.slice(0,6).map(c=>`<div class="list-card"><div class="list-q">${escapeHtml(c.question)}</div><div class="list-a">${c.answer?escapeHtml(c.answer):'<em>No answer yet</em>'}</div></div>`).join('')}
+  const dupeCount = cards.filter(c=>c.isDuplicate).length;
+  box.innerHTML = `<div class="feedback-banner">Found ${cards.length} question${cards.length>1?'s':''} ✅ ${missingCount>0?`(${missingCount} still need answers)`:''} ${dupeCount>0?`(⚠️ ${dupeCount} possible duplicates)`:''}</div>
+    ${cards.slice(0,6).map(c=>`<div class="list-card"><div class="list-q">${escapeHtml(c.question)}${c.isDuplicate?' <span class="stale-badge">⚠️ duplicate</span>':''}</div><div class="list-a">${c.answer?escapeHtml(c.answer):'<em>No answer yet</em>'}</div></div>`).join('')}
     ${cards.length>6 ? `<div class="sub">+ ${cards.length-6} more...</div>` : ''}
     <button class="btn btn-primary btn-block" style="margin-top:10px;" data-action="confirm-import">Import ${cards.length} card${cards.length>1?'s':''}</button>`;
   document.querySelector('[data-action="confirm-import"]').addEventListener('click', handleAction);
@@ -1487,12 +1788,41 @@ function saveSettings(){
   modalState = null; render();
 }
 function exportData(){
-  const blob = new Blob([JSON.stringify({cards:state.cards, subjects:state.subjects, stats:state.stats}, null, 2)], {type:'application/json'});
+  const blob = new Blob([JSON.stringify({cards:state.cards, subjects:state.subjects, stats:state.stats, settings:state.settings}, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = 'recall-backup.json'; a.click();
-  }
-  /* ---------------- Utils ---------------- */
+}
+
+function restoreData(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const data = JSON.parse(reader.result);
+      if(!data || !Array.isArray(data.cards) || !Array.isArray(data.subjects)){
+        alert('That file doesn\'t look like a valid Recall backup.');
+        return;
+      }
+      if(!confirm(`This will replace your current data with the backup (${data.cards.length} cards, ${data.subjects.length} subjects). Continue?`)) return;
+      state.cards = data.cards;
+      state.subjects = data.subjects;
+      if(data.stats) state.stats = Object.assign({ streak:0, lastStudyDate:null, xp:0, history:[], freezeAvailable:true, freezeWeekStart:null, reviewLog:[], studyTimeLog:[] }, data.stats);
+      if(data.settings) state.settings = Object.assign({ theme:'dark', name:'there', dailyGoal:20, weeklyGoals:{}, direction:'forward' }, data.settings);
+      persistAll();
+      modalState = null;
+      state.view = 'home';
+      render();
+      alert('Backup restored successfully.');
+    }catch(e){
+      alert('Could not read that file — make sure it\'s an unedited Recall backup export.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ---------------- Utils ---------------- */
 function escapeHtml(str){
   return String(str===null || str===undefined ? '' : str).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
